@@ -1,0 +1,27 @@
+# Configuración de Render (https://render.com) — plan gratuito.
+# Sube este archivo en la raíz del repositorio (junto a server.js, public/…) para que Render
+# cree el servicio web con HTTPS automático. El disco de 1 GB también es gratuito.
+services:
+  - type: web
+    name: quincena
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    autoDeploy: true
+    disk:
+      name: quincena-datos
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: DATA_DIR
+        value: /data
+      - key: TRUST_PROXY
+        value: "1"
+      - key: CLIENT_KEY
+        sync: false        # se rellena en el panel de Render (código que usan los clientes)
+      - key: ADMIN_USERNAME
+        sync: false        # usuario del primer administrador
+      - key: ADMIN_PASSWORD
+        sync: false        # contraseña de 16+ caracteres del primer administrador

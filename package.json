@@ -1,0 +1,13 @@
+{
+  "name": "quincena-backend",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Quincena: servidor con cuentas y roles (administrador, cobrador, cliente), expedientes compartidos con versiones, capturas de pago y auditoría. Sin dependencias.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test tests/front.test.js tests/server.test.js tests/roles.test.js",
+    "admin": "node scripts/create-admin.js"
+  },
+  "engines": { "node": ">=22.13" }
+}
