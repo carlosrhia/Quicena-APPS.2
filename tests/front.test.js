@@ -15,7 +15,12 @@ test('todas las vistas se renderizan sin errores', () => {
   assert.doesNotMatch(app.html(), /Panel del prestamista|data-v="prestamista"|aria-label="Vista"/, 'el panel no está en la interfaz principal');
   let h = '';
   for (const pt of ['pend', 'hist', 'rep', 'cfg']) { x.ui.pTab = pt; h += x.fn.vPrestamista(); }
-  for (const t of ['Reportes', 'Historial de pagos', 'Exportar y respaldar', 'Conexión con el servidor', 'Desembolsos']) assert.ok(h.includes(t), t);
+  for (const t of ['Reportes', 'Historial de pagos', 'Exportar y respaldar', 'Desembolsos']) assert.ok(h.includes(t), t);
+  // La conexión ya no se configura desde la app: viene puesta de fábrica y no hay botón en el perfil.
+  assert.doesNotMatch(h, /Conexión con el servidor/, 'no se pide configurar el servidor');
+  assert.ok(x.fn.sheetHTML().length > 50);
+  x.ui.sheet = { type: 'profile' };
+  assert.doesNotMatch(x.fn.sheetHTML(), /data-a="server"/, 'el perfil no ofrece conectar al servidor');
   for (const type of ['server', 'profile', 'faq', 'pin', 'notes', 'importConfirm']) { x.ui.sheet = { type, mode: 'enter' }; x.ui.importData = x.getS(); assert.ok(x.fn.sheetHTML().length > 50, type); }
 });
 
@@ -375,7 +380,9 @@ test('comprobante del desembolso: oculto detrás de la tarjeta y con pista anima
 });
 
 test('cuenta: exige nombre completo, cédula y tres fotos antes de registrar', async () => {
-  const app = fresh(), { x } = app;
+  // Sin servidor disponible: la cuenta se crea en el dispositivo (y se sube sola cuando el servidor responda).
+  const app = loadApp(HTML, { fetchImpl: async () => { throw new Error('sin red'); } }), { x } = app;
+  x.Backend.enabled = false; // modo local explícito para esta prueba
   assert.equal(x.ui.sheet.type, 'authHome', 'sin cuenta primero aparece la pantalla de acceso');
   x.A.authCreate();
   assert.equal(x.ui.sheet.type, 'signup', 'el registro empieza directamente en los datos personales');

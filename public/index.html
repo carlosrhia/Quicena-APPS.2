@@ -627,11 +627,15 @@ const themeBtn=()=>{
 /* Sin servidor la app funciona igual en modo local. Con servidor, cliente y prestamista pueden usar teléfonos distintos:
    el estado completo se sincroniza (con control de versiones) y las capturas se guardan como archivos, no como base64. */
 const Backend={
-  url:'',code:'',enabled:undefined,on:false,status:'local',ver:0,clientId:'',activeClientId:'',clients:[],
+  /* Servidor publicado por defecto: la app queda conectada sin pedir nada al cliente. */
+  DEFAULT_URL:'https://quincena-apps-2.onrender.com',
+  DEFAULT_CODE:'cartera-2026-x7k',
+  url:'https://quincena-apps-2.onrender.com',code:'cartera-2026-x7k',enabled:true,on:false,status:'local',ver:0,clientId:'',activeClientId:'',clients:[],
   tokens:{cliente:'',prestamista:''},staffToken:'',busy:false,again:false,timer:null,poll:null,pending:null,
   cfgKey:'quincena.server',clientKey:'quincena.clientId',
   load(){
-    try{const c=JSON.parse(localStorage.getItem(this.cfgKey)||'null');if(c){this.url=c.url||'';this.code=c.code||'';this.enabled=c.enabled}}catch(e){}
+    this.url=this.DEFAULT_URL;this.code=this.DEFAULT_CODE;this.enabled=true;
+    try{const c=JSON.parse(localStorage.getItem(this.cfgKey)||'null');if(c&&(c.url||c.code)){this.url=c.url||this.DEFAULT_URL;this.code=c.code||this.DEFAULT_CODE;this.enabled=c.enabled!==false}}catch(e){}
     try{this.clientId=localStorage.getItem(this.clientKey)||''}catch(e){}
     try{const q=new URLSearchParams(location.search).get('api');if(q&&/^https?:\/\//i.test(q)){this.url=q;this.enabled=true;this.persist()}}catch(e){}
   },
@@ -639,7 +643,7 @@ const Backend={
   statePath(){if(ui.role==='prestamista')return this.activeClientId?'/api/clients/'+encodeURIComponent(this.activeClientId)+'/state':null;return this.clientId?'/api/state':null;},
   /* El cobrador trabaja con los expedientes de sus clientes, igual que el administrador con los de todos. */
   isStaff(){return !!this.staffToken},
-  base(){return String(this.url||'').trim().replace(/\/+$/,'')},
+  base(){const u=String(this.url||'').trim().replace(/\/+$/,'');return u||location.origin},
   tok(){return this.staffToken||this.tokens.cliente},
   async req(path,o={}){
     const c=new AbortController(),to=setTimeout(()=>c.abort(),9000);
@@ -1319,7 +1323,7 @@ function vPrestamista(){
   const c5=h.length;
   h+='<section class="card stack"><h2>Configuración</h2><div class="label">Interés según el número de cuotas</div><div class="grid3"><div class="field"><label class="small" for="cfgRate1">1 cuota (%)</label><input type="number" id="cfgRate1" min="0" max="100" step="0.5" value="'+pctOf(1)+'"></div><div class="field"><label class="small" for="cfgRate2">2 cuotas (%)</label><input type="number" id="cfgRate2" min="0" max="100" step="0.5" value="'+pctOf(2)+'"></div><div class="field"><label class="small" for="cfgRate3">3 cuotas (%)</label><input type="number" id="cfgRate3" min="0" max="100" step="0.5" value="'+pctOf(3)+'"></div></div><div class="field"><label class="label" for="cfgMora">Interés por pago tardío ($)</label><input type="number" id="cfgMora" min="0" step="0.5" value="'+S.config.mora+'"></div><div class="label">Datos de cobro que ve el cliente</div>'+
    S.config.methods.map(m=>'<div class="field"><label class="small" for="cfg_'+m.id+'">'+esc(m.name)+'</label><input type="text" id="cfg_'+m.id+'" value="'+esc(m.detail)+'"></div>').join('')+
-   '<button class="btn dark" data-a="saveCfg">Guardar cambios</button><button class="btn ghost" data-a="chgPin">Cambiar PIN</button><button class="btn ghost" data-a="server">Conexión con el servidor</button><button class="btn ghost" data-a="reset">Restablecer datos de ejemplo</button><div class="label">Pruebas</div><div class="row"><button class="btn ghost sm" data-a="skip" data-v="1">Avanzar 1 día</button><button class="btn ghost sm" data-a="skip" data-v="15">Avanzar 15 días</button></div><div class="small muted">Fecha de la app: '+fmtD(today())+(SHIFT?' (simulada)':'')+'</div><div class="small muted">Los datos de cobro y la tasa son de ejemplo. Cámbialos por los tuyos.</div>'+storageInfo()+'</section>';
+   '<button class="btn dark" data-a="saveCfg">Guardar cambios</button><button class="btn ghost" data-a="chgPin">Cambiar PIN</button><button class="btn ghost" data-a="reset">Restablecer datos de ejemplo</button><div class="label">Pruebas</div><div class="row"><button class="btn ghost sm" data-a="skip" data-v="1">Avanzar 1 día</button><button class="btn ghost sm" data-a="skip" data-v="15">Avanzar 15 días</button></div><div class="small muted">Fecha de la app: '+fmtD(today())+(SHIFT?' (simulada)':'')+'</div><div class="small muted">Los datos de cobro y la tasa son de ejemplo. Cámbialos por los tuyos.</div>'+storageInfo()+'</section>';
   const T=(ui.pTab==='hist'||ui.pTab==='rep'||ui.pTab==='cfg')?ui.pTab:'pend';
   const pend=h.slice(0,c4), rep=h.slice(c4,c5), cfg=h.slice(c5);
   const nDes=S.loans.filter(l=>l.status==='activo'&&!l.desembolso).length, nPend=sol.length+val.length+abonos.length+nDes;
@@ -1385,7 +1389,7 @@ function sheetHTML(){
     const phone=pr.phone||pm.phone||'', ci=pr.ci||pm.ci||'', email=pr.email||'';
     const fullName=S.user.fullName||S.user.name||'Tu nombre completo';
     const initials=String(fullName).trim().split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase()||'QR';
-    body='<div class="profile-page"><section class="profile-head"><button class="profile-back" data-a="profileClose" aria-label="Volver">'+svg('back')+'</button><div class="profile-avatar">'+esc(initials)+'</div><h1>'+esc(fullName)+'</h1><div class="profile-rank"><span class="rank-mark">✦</span> '+esc(level().name)+' <span class="rank-chevron">›</span></div></section><main class="profile-content"><h2>Información personal</h2><div class="profile-info-list"><div class="profile-row"><span class="profile-flag">🇻🇪</span><div class="profile-row-text"><small>País</small><strong>Venezuela</strong></div></div><div class="profile-row"><span class="profile-icon id-icon">'+svg('id')+'</span><div class="profile-row-text"><small>Número de identificación</small><strong>'+esc(ci||'Agrega tu identificación')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="ci">Editar <span>›</span></button></div><div class="profile-row"><span class="profile-icon mail-icon">'+svg('mail')+'</span><div class="profile-row-text"><small>Correo electrónico</small><strong>'+esc(email||'Añadir correo electrónico')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="email">Editar <span>›</span></button></div><div class="profile-row"><span class="profile-icon phone-icon">'+svg('phone')+'</span><div class="profile-row-text"><small>Número de teléfono</small><strong>'+esc(phone||'Añadir número de teléfono')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="phone">Editar <span>›</span></button></div></div><h2 class="profile-section-title">Ayuda y soporte</h2><div class="profile-support-stack"><button class="profile-support-row" data-a="faq"><span class="profile-support-icon faq-icon">'+svg('help')+'</span><span class="profile-row-text"><strong>Preguntas frecuentes</strong><small>Encuentra respuestas a tus dudas</small></span><span class="profile-support-arrow">'+svg('chevron')+'</span></button><a class="profile-support-row" href="https://wa.me/584248411730?s=p" target="_blank" rel="noopener noreferrer"><span class="profile-support-icon wa-icon">'+svg('whatsapp')+'</span><span class="profile-row-text"><strong>Contáctanos por WhatsApp</strong><small>WhatsApp 0424 8411730</small></span><span class="profile-support-arrow">'+svg('chevron')+'</span></a></div><button class="profile-tutorial" data-a="profileDocs">Completar verificación de identidad</button><button class="profile-tutorial" data-a="tutorialRestart">Ver tutorial de la aplicación</button><button class="profile-tutorial" data-a="server">Conexión con el servidor</button><button class="profile-tutorial" data-a="authLogout">Cerrar sesión</button><p class="profile-note">Cuando hay conexión, tus datos se guardan en tu cuenta. No compartas tu cédula ni capturas de pago en dispositivos públicos.</p></main></div>';
+    body='<div class="profile-page"><section class="profile-head"><button class="profile-back" data-a="profileClose" aria-label="Volver">'+svg('back')+'</button><div class="profile-avatar">'+esc(initials)+'</div><h1>'+esc(fullName)+'</h1><div class="profile-rank"><span class="rank-mark">✦</span> '+esc(level().name)+' <span class="rank-chevron">›</span></div></section><main class="profile-content"><h2>Información personal</h2><div class="profile-info-list"><div class="profile-row"><span class="profile-flag">🇻🇪</span><div class="profile-row-text"><small>País</small><strong>Venezuela</strong></div></div><div class="profile-row"><span class="profile-icon id-icon">'+svg('id')+'</span><div class="profile-row-text"><small>Número de identificación</small><strong>'+esc(ci||'Agrega tu identificación')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="ci">Editar <span>›</span></button></div><div class="profile-row"><span class="profile-icon mail-icon">'+svg('mail')+'</span><div class="profile-row-text"><small>Correo electrónico</small><strong>'+esc(email||'Añadir correo electrónico')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="email">Editar <span>›</span></button></div><div class="profile-row"><span class="profile-icon phone-icon">'+svg('phone')+'</span><div class="profile-row-text"><small>Número de teléfono</small><strong>'+esc(phone||'Añadir número de teléfono')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="phone">Editar <span>›</span></button></div></div><h2 class="profile-section-title">Ayuda y soporte</h2><div class="profile-support-stack"><button class="profile-support-row" data-a="faq"><span class="profile-support-icon faq-icon">'+svg('help')+'</span><span class="profile-row-text"><strong>Preguntas frecuentes</strong><small>Encuentra respuestas a tus dudas</small></span><span class="profile-support-arrow">'+svg('chevron')+'</span></button><a class="profile-support-row" href="https://wa.me/584248411730?s=p" target="_blank" rel="noopener noreferrer"><span class="profile-support-icon wa-icon">'+svg('whatsapp')+'</span><span class="profile-row-text"><strong>Contáctanos por WhatsApp</strong><small>WhatsApp 0424 8411730</small></span><span class="profile-support-arrow">'+svg('chevron')+'</span></a></div><button class="profile-tutorial" data-a="profileDocs">Completar verificación de identidad</button><button class="profile-tutorial" data-a="tutorialRestart">Ver tutorial de la aplicación</button><button class="profile-tutorial" data-a="authLogout">Cerrar sesión</button><p class="profile-note">Cuando hay conexión, tus datos se guardan en tu cuenta. No compartas tu cédula ni capturas de pago en dispositivos públicos.</p></main></div>';
   }
   if(s.type==='profileEdit'){
     const pr=S.user.profile||{}, pm=S.user.pm||{};
@@ -1691,9 +1695,15 @@ const A={
     S.user.creditLineReview={status:'pending',limit:0,requestedAt:today(),reviewedAt:null,reason:''};
     S.user.registered=true;S.user.createdAt=S.user.createdAt||today();writeAuthSession(normalizeEmail((S.user.profile||{}).email)||'');
     notify('prestamista','Nueva cuenta creada: '+name+' · C.I. '+ci+'. La línea de crédito espera revisión de identidad.');
-    if(Backend.url&&!Backend.clientId){
+    if(Backend.enabled!==false&&Backend.url&&!Backend.clientId){
+      // El servidor viene configurado de fábrica: si no está encendido todavía (Render tarda ~40 s en despertar),
+      // se reintenta la conexión y la cuenta se sube sola en cuanto responda.
+      if(!Backend.on)await Backend.connect();
       const r=await Backend.signup(ci,pass);
-      if(!r.ok){S.user.registered=false;err(r.error||'No se pudo crear la cuenta en el servidor.');if(btn){btn.disabled=false;btn.textContent='Crear cuenta'}return;}
+      if(!r.ok){
+        const msg=(r.error||'No se pudo crear la cuenta en el servidor.').replace('Conéctate primero al servidor.','El servidor está despertando. Espera unos segundos y pulsa Crear cuenta otra vez.');
+        err(msg);if(btn){btn.disabled=false;btn.textContent='Crear cuenta'}return;
+      }
     }
     ui.err='';ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};
     save();render();renderSheet();toast('Cuenta creada. Tus documentos están listos para revisión.');
@@ -1949,7 +1959,7 @@ const A={
   renderSheet();
   toast(ok?'Servidor conectado':Backend.status==='auth'?'Código de acceso incorrecto':Backend.status==='offline'?'No se pudo llegar al servidor':'Esa dirección no responde como servidor de Quincena');
  },
- srvOff(){Backend.stop();Backend.enabled=false;Backend.status='local';Backend.persist();renderSheet();toast('Modo local activado')},
+ srvOff(){Backend.stop();Backend.enabled=true;Backend.url=Backend.DEFAULT_URL;Backend.code=Backend.DEFAULT_CODE;Backend.persist();Backend.connect().then(ok=>{renderSheet();toast(ok?'Conectado al servidor':'Reintentando la conexión…')})},
  range(v){ui.range=v;ui.allPays=false;render()},
  allPays(){ui.allPays=!ui.allPays;render()},
  exportCsv(v){

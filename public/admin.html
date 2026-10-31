@@ -65,6 +65,8 @@
 'use strict';
 const $=s=>document.querySelector(s);const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let token='',me=null,clients=[],current=null,toastTimer=null,blobUrls=new Set();
+/* Dirección del servidor: por defecto el mismo sitio donde se abre el panel (Render sirve app y panel juntos).
+   ?api=https://otro-servidor solo hace falta si el panel se abre desde otro sitio. */
 const apiBase=(()=>{const u=new URLSearchParams(location.search).get('api');if(u&&/^https?:\/\//i.test(u))return u.replace(/\/+$/,'');return ''})();
 function toast(s){const t=$('#toast');t.textContent=s;t.classList.remove('hidden');clearTimeout(toastTimer);toastTimer=setTimeout(()=>t.classList.add('hidden'),3200)}
 async function api(path,{method='GET',body,auth=true}={}){const headers={};if(body!==undefined)headers['Content-Type']='application/json';if(auth&&token)headers.Authorization='Bearer '+token;const r=await fetch(apiBase+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body),cache:'no-store'});let data=null;try{data=await r.json()}catch(_){}if(!r.ok){if(r.status===401&&auth){logout(false);throw new Error('La sesión expiró. Inicia sesión de nuevo.')}throw new Error(data?.error||'No se pudo completar la petición.')}return data}

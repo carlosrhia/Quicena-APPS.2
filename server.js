@@ -22,7 +22,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 // Cuenta de arranque: solo se usa para crear el primer administrador en la base de datos.
 const ADMIN_USERNAME = String(process.env.ADMIN_USERNAME || '').trim();
 const ADMIN_PASSWORD = String(process.env.ADMIN_PASSWORD || '');
-const CLIENT_KEY = String(process.env.CLIENT_KEY || '');
+const CLIENT_KEY = String(process.env.CLIENT_KEY || 'cartera-2026-x7k');
 const ORIGINS = String(process.env.ALLOWED_ORIGINS || '*').split(',').map((s) => s.trim()).filter(Boolean);
 const TRUST_PROXY = process.env.TRUST_PROXY === '1';
 const MAX_STATE = 8 * 1024 * 1024;
@@ -367,7 +367,7 @@ async function handle(req, res) {
   const url = new URL(req.url, 'http://x');
   const p = url.pathname, ip = ipOf(req);
 
-  if (p === '/api/health' && req.method === 'GET') return send(res, 200, { quincena: true, ok: true, time: nowIso() });
+  if (p === '/api/health' && req.method === 'GET') return send(res, 200, { quincena: true, ok: true, version: '2.1.0', admins: q.listUsers.all().filter((u) => u.role === 'admin' && u.active).length, time: nowIso() });
 
   if (p === '/api/auth' && req.method === 'POST') {
     if (blockedIp(ip)) return send(res, 429, { error: 'Demasiados intentos. Espera unos minutos.' });
@@ -703,6 +703,13 @@ async function handle(req, res) {
     if (!fs.existsSync(f)) return send(res, 404, { error: 'App del cliente no instalada.' });
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': `default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self' https: wss:; base-uri 'self'; form-action 'self'; frame-ancestors 'none'` });
     return res.end(fs.readFileSync(f));
+  }
+  if (req.method === 'GET' && !p.startsWith('/api/')) {
+    const f = path.join(PUBLIC_DIR, 'index.html');
+    if (fs.existsSync(f)) {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache' });
+      return res.end(fs.readFileSync(f));
+    }
   }
   return send(res, 404, { error: 'No encontrado.' });
 }
