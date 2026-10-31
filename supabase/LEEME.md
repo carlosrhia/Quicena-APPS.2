@@ -45,7 +45,13 @@ where lower(email) = lower('tu-correo@ejemplo.com')
 on conflict (user_id) do update set role = 'admin', active = true;
 ```
 
-Debe decir *Success. 1 row affected*. Si dice *0 rows*, el correo no coincide con el del paso anterior.
+El editor responderá *Success. No rows returned*: **es normal**, un `insert` no devuelve filas. Para comprobar que quedó dado de alta, ejecuta en otra consulta:
+
+```sql
+select email, name, role, active from public.staff;
+```
+
+Debe aparecer tu correo con `role = admin`. Si la tabla sale vacía, el correo no existe en **Authentication → Users** (revisa el paso anterior con `select email, email_confirmed_at from auth.users;`) y repite el `insert`.
 
 ### Paso 5. Copiar las dos claves públicas
 **Project Settings** (engranaje) → **API Keys** (en versiones antiguas: *Project Settings → API*). Copia:
