@@ -1,13 +1,9 @@
 {
-  "name": "quincena-backend",
-  "version": "2.0.0",
+  "name": "quincena",
+  "version": "3.0.0",
   "private": true,
-  "description": "Quincena: servidor con cuentas y roles (administrador, cobrador, cliente), expedientes compartidos con versiones, capturas de pago y auditoría. Sin dependencias.",
-  "main": "server.js",
+  "description": "Quincena: app de préstamos (cliente) y panel de administración, publicada en Vercel y conectada a Supabase (cuentas, expedientes, fotos privadas y reglas de seguridad en la base de datos).",
   "scripts": {
-    "start": "node server.js",
-    "test": "node --test tests/front.test.js tests/server.test.js tests/roles.test.js",
-    "admin": "node scripts/create-admin.js"
-  },
-  "engines": { "node": ">=22.13" }
+    "test": "node --test tests/front.test.js"
+  }
 }

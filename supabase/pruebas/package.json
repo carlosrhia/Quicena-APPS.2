@@ -1,0 +1,13 @@
+{
+  "name": "quincena-pruebas-supabase",
+  "private": true,
+  "description": "Pruebas del esquema SQL (PGlite) y de extremo a extremo (Chromium + Playwright). No se usan en producción.",
+  "type": "module",
+  "scripts": {
+    "test": "node esquema.test.mjs && node e2e.test.mjs"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.2.12",
+    "playwright": "1.47.2"
+  }
+}
