@@ -379,7 +379,7 @@ test('comprobante del desembolso: oculto detrás de la tarjeta y con pista anima
   assert.equal(x.ui.peekDone, true);
 });
 
-test('cuenta: exige nombre completo, cédula y tres fotos antes de registrar', async () => {
+test('cuenta: exige nombre completo, cédula, foto de la cédula y foto del rostro antes de registrar', async () => {
   // Sin servidor disponible: la cuenta se crea en el dispositivo (y se sube sola cuando el servidor responda).
   const app = loadApp(HTML, { fetchImpl: async () => { throw new Error('sin red'); } }), { x } = app;
   x.Backend.enabled = false; // modo local explícito para esta prueba
@@ -389,15 +389,17 @@ test('cuenta: exige nombre completo, cédula y tres fotos antes de registrar', a
   assert.match(x.fn.sheetHTML(), /Nombre completo/); assert.match(x.fn.sheetHTML(), /Cédula de identidad/);
   assert.match(x.fn.sheetHTML(), /suFront/); assert.match(x.fn.sheetHTML(), /suBack/); assert.match(x.fn.sheetHTML(), /suSelfie/);
   x.A.close(); assert.equal(x.ui.sheet.type, 'signup', 'la hoja de registro no se puede cerrar sin completarla');
-  const go = async (name, ci, withDocs = false, pass = 'clave-larga-1') => { setInput(app, '#suName', { value: name }); setInput(app, '#suCI', { value: ci }); setInput(app, '#suPass', { value: pass }); setInput(app, '#suPass2', { value: pass }); if(withDocs) for(const id of ['#suFront','#suBack','#suSelfie']) setInput(app,id,{files:[{type:'image/png',name:id.slice(1)+'.png',size:100}]}); await x.A.signupSave(); };
+  const go = async (name, ci, withDocs = false, pass = 'clave-larga-1') => { setInput(app, '#suName', { value: name }); setInput(app, '#suCI', { value: ci }); setInput(app, '#suPass', { value: pass }); setInput(app, '#suPass2', { value: pass }); if(withDocs) for(const id of ['#suFront','#suSelfie']) setInput(app,id,{files:[{type:'image/png',name:id.slice(1)+'.png',size:100}]}); await x.A.signupSave(); };
   await go('Carlos', 'V-12345678'); assert.match(app.ctx.document.querySelector('#suerr').textContent, /nombre completo/i);
   await go('Carlos Pérez', '123'); assert.match(app.ctx.document.querySelector('#suerr').textContent, /cédula/i);
   await go('Carlos 123 Pérez', 'V-12345678'); assert.match(app.ctx.document.querySelector('#suerr').textContent, /nombre completo/i);
+  await go('Carlos Pérez', 'V-12345678'); assert.match(app.ctx.document.querySelector('#suerr').textContent, /cédula y la foto de tu rostro/i, 'sin fotos no se crea la cuenta');
   assert.ok(!x.getS().user.registered);
   await go('  carlos   andrés pérez ', 'v 12.345.678', true);
   const u = x.getS().user;
   assert.equal(u.registered, true); assert.equal(u.name, 'carlos andrés pérez'); assert.equal(u.profile.ci, 'V-12345678');
-  assert.ok(u.identityDocs.front && u.identityDocs.back && u.identityDocs.selfie);
+  assert.ok(u.identityDocs.front && u.identityDocs.selfie, 'cédula y rostro');
+  assert.equal(u.identityDocs.back, '', 'el reverso de la cédula es opcional');
   assert.equal(u.creditLineReview.status, 'pending', 'la línea comienza pendiente de aprobación');
   assert.equal(x.ui.sheet.type, 'tutorial', 'tras registrarse sigue el recorrido');
   assert.equal(x.fn.firstName(), 'carlos');

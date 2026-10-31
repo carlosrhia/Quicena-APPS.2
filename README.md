@@ -1,68 +1,49 @@
-# Quincena Préstamos — backend con cuentas y roles
+# Quincena Préstamos
 
-Servidor Node.js (sin dependencias) para la app de clientes `public/index.html` y el panel `public/admin.html`.
-Todo vive en un mismo sitio: la app del cliente en `/`, el panel del personal en `/admin.html`.
+App de préstamos para clientes (`/`) y panel de administración (`/admin.html`), publicada en **Vercel** y conectada a **Supabase** (plan gratuito).
 
-## Qué hay en esta versión
+👉 **Instalación paso a paso:** [`supabase/LEEME.md`](supabase/LEEME.md)
 
-- **Tres tipos de cuenta**
-  - **Administrador**: todo. Ve todos los clientes, crea y edita usuarios, asigna clientes a los cobradores, consulta la auditoría.
-  - **Cobrador**: entra con su propio usuario y contraseña y **solo ve y cobra los clientes que tenga asignados**. No puede crear usuarios ni ver los de otros.
-  - **Cliente**: se registra desde la app con su cédula y sus tres fotos, y solo accede a su propio expediente.
-- Contraseñas cifradas con **scrypt** y sesiones guardadas en la base: al desactivar una cuenta, cambiarle la contraseña o el rol, sus sesiones abiertas se cortan al instante.
-- Asignación cobrador ↔ cliente (`assignments`), cambiando cuando quieras desde el panel.
-- Auditoría con el autor real de cada acción (`admin:ana`, `cobrador:pedro`, `cliente`): accesos, escrituras de expedientes, lecturas de imágenes y gestión de usuarios.
-- Los expedientes y las capturas siguen siendo privados: las imágenes se sirven solo por `/api/uploads/:nombre` con token, y el cobrador únicamente ve las de sus clientes.
+## Cómo funciona
 
-## Requisitos
-
-- Node.js `>=22.13` (usa `node:sqlite`, `http` y `crypto` integrados). No hay que instalar nada más.
-- Un disco persistente para `DATA_DIR`.
-- HTTPS delante del servicio en producción.
-
-## Instalar y arrancar
-
-```bash
-cd backend
-npm test                 # pruebas: front, servidor y roles
-node scripts/create-admin.js admin "Tu Nombre"   # crea el administrador (pide la contraseña)
-node server.js
+```
+Cliente (móvil)                Supabase                         Panel /admin.html
+───────────────                ────────                         ─────────────────
+Crear cuenta: nombre,   ──►  Auth (cédula + contraseña)   ◄──  Login con correo + contraseña
+cédula, contraseña,          Tabla clients (expediente)        (administrador o cobrador)
+foto cédula + rostro   ──►  Storage privado "documentos"  ◄──  Ve fotos con enlaces temporales
+Solicita préstamo      ──►  Reglas RLS + trigger que       ◄──  Aprueba línea, confirma préstamo,
+Envía pagos                  impide autoaprobarse               valida pagos
 ```
 
-- Panel del personal: `/admin.html` (administrador y cobradores).
-- App del cliente: `/`.
-- `CLIENT_KEY` es el código de acceso que se pide a los clientes para entrar a la app. Cámbialo por un secreto largo.
-
-### Variables de entorno
-
-| Variable | Para qué |
-|---|---|
-| `PORT` | Puerto (por defecto 3000) |
-| `DATA_DIR` | Carpeta de la base de datos y las imágenes (por defecto `./data`) |
-| `CLIENT_KEY` | Código que se pide al cliente para entrar |
-| `ALLOWED_ORIGINS` | Dominios permitidos; en producción, el tuyo |
-| `TRUST_PROXY` | `1` si hay un proxy de confianza delante (para la IP real) |
-| `TOKEN_SECRET` | Opcional; si falta se genera y se guarda en `DATA_DIR/secret.key` |
-| `ADMIN_USERNAME` / `ADMIN_PASSWORD` | Opcional: crea el primer administrador al arrancar (contraseña de 16+ caracteres). Solo se usa la primera vez. |
-
-## Uso diario
-
-1. Entra en `/admin.html` como administrador.
-2. **Usuarios y roles → Nuevo usuario**: nombre, usuario, contraseña y rol *Cobrador*; marca los clientes que atiende.
-3. El cobrador entra en `/admin.html` con su usuario y contraseña: solo verá esos clientes y podrá aprobar líneas, préstamos, validar pagos y abonos, con todo registrado a su nombre.
-4. En **Auditoría** revisas quién hizo qué y cuándo.
+- **Cuentas de cliente:** la cédula es el usuario (internamente `v12345678@clientes.quincena.app`) y la contraseña la elige el cliente. Se puede entrar desde cualquier teléfono.
+- **Fotos:** la de la cédula y la del rostro son obligatorias (el reverso de la cédula es opcional). Se guardan en un bucket **privado**; solo las ven el propio cliente y el personal autorizado.
+- **Seguridad en la base de datos:** el cliente solo puede leer y modificar su expediente, y un trigger (`quincena_guard`) rechaza cualquier intento de aprobarse la línea, cambiar puntos, marcar pagos como validados o borrar historial.
+- **Roles del panel:** *administrador* (todo, gestión de usuarios y auditoría) y *cobrador* (solo los clientes asignados).
+- **Sin Supabase configurado** la app funciona en modo demostración, solo en el dispositivo.
 
 ## Estructura
 
 ```
-server.js                  Servidor HTTP, autenticación, roles, rutas /api/*
-public/index.html          App del cliente
-public/admin.html          Panel del personal (clientes, usuarios y roles, auditoría)
-scripts/create-admin.js    Crear administrador o restablecer su contraseña
-tests/                     Pruebas (front, servidor, roles)
-data/                      Base de datos SQLite e imágenes (no se sube al repositorio)
+public/index.html        App del cliente
+public/admin.html        Panel del personal
+public/vendor/           Cliente oficial de Supabase (copia local, MIT)
+public/config.js         Configuración manual opcional (si no usas variables de Vercel)
+api/config.js            Función de Vercel: entrega SUPABASE_URL y SUPABASE_ANON_KEY a la web
+supabase/schema.sql      Tablas, reglas de seguridad, almacenamiento y funciones
+supabase/LEEME.md        Guía de instalación (Supabase + Vercel)
+supabase/pruebas/        Pruebas del esquema (PGlite) y de extremo a extremo (Chromium)
+tests/                   Pruebas de la lógica de la app (npm test)
+vercel.json              Carpeta publicada y cabeceras de seguridad
+```
+
+## Pruebas
+
+```bash
+npm test                                         # lógica de la app (sin dependencias)
+cd supabase/pruebas && npm install && npm test   # esquema SQL + recorrido completo en navegador
 ```
 
 ## Pendiente para producción
 
-Revisa profesionalmente autenticación y recuperación de cuenta, HTTPS y proxy, gestión de secretos, respaldos cifrados, retención de documentos y cumplimiento legal (datos personales y límites de interés). Esta base ya separa por roles, pero no es una auditoría de seguridad.
+Revisión legal (protección de datos personales y límites de interés), política de conservación de documentos y copias de seguridad periódicas de Supabase.

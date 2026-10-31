@@ -506,6 +506,10 @@ details.hd .kv{padding:4px 0}
 <div id="layer"></div>
 <div class="toast" id="toast" hidden></div>
 
+<!-- Supabase: cliente oficial (copia local) y configuración (variables de Vercel en /api/config o, si no, config.js) -->
+<script src="vendor/supabase.js"></script>
+<script src="/api/config"></script>
+<script src="config.js"></script>
 <script>
 /* ============ utilidades ============ */
 const $=s=>document.querySelector(s);
@@ -605,11 +609,6 @@ const makeEmailCode=()=>{try{const a=new Uint32Array(1);crypto.getRandomValues(a
 const validEmail=v=>/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v||'').trim());
 const ui={role:'cliente',tab:'inicio',loanTab:'activas',open:{},sheet:null,draft:null,
   cal:{y:new Date().getFullYear(),m:new Date().getMonth()},sel:today(),err:''};
-const savedSession=normalizeEmail(readAuthSession());
-const savedAccountEmail=normalizeEmail((S.user.profile||{}).email||'');
-if(!isRegistered())ui.sheet={type:'authHome'};
-else if(!savedSession||!savedAccountEmail||savedSession!==savedAccountEmail)ui.sheet={type:'authHome'};
-else if(!S.user.tutorialDone)ui.sheet={type:'tutorial',step:0};
 
 /* ============ modo claro / oscuro (botón luna / sol) ============ */
 /* El icono muestra el modo activo: luna en modo oscuro, sol en modo claro. Al tocarlo se pasa al otro modo. */
@@ -623,145 +622,126 @@ const themeBtn=()=>{
   return '<button class="iconbtn sm themebtn'+(ui.themeSpin?' spin':'')+'" data-a="theme" aria-label="'+t+'" title="'+t+'">'+svg(dark?'moon':'sun')+'</button>';
 };
 
-/* ============ conexión opcional con servidor (ver carpeta /backend) ============ */
-/* Sin servidor la app funciona igual en modo local. Con servidor, cliente y prestamista pueden usar teléfonos distintos:
-   el estado completo se sincroniza (con control de versiones) y las capturas se guardan como archivos, no como base64. */
+/* ============ conexión con Supabase (cuentas, expedientes e imágenes) ============ */
+/* La configuración llega desde /api/config (variables de entorno de Vercel) o desde config.js.
+   Sin configuración la app funciona en modo local, solo en este dispositivo. Ver supabase/LEEME.md. */
 const Backend={
-  /* Servidor publicado por defecto: la app queda conectada sin pedir nada al cliente. */
-  DEFAULT_URL:'https://quincena-apps-2.onrender.com',
-  DEFAULT_CODE:'cartera-2026-x7k',
-  url:'https://quincena-apps-2.onrender.com',code:'cartera-2026-x7k',enabled:true,on:false,status:'local',ver:0,clientId:'',activeClientId:'',clients:[],
-  tokens:{cliente:'',prestamista:''},staffToken:'',busy:false,again:false,timer:null,poll:null,pending:null,
-  cfgKey:'quincena.server',clientKey:'quincena.clientId',
+  cfg:(typeof window!=='undefined'&&window.QUINCENA_CONFIG)||{},
+  sb:null,url:'',enabled:true,on:false,status:'local',ver:0,clientId:'',activeClientId:'',clients:[],
+  busy:false,again:false,timer:null,poll:null,pending:null,retryTimer:null,
+  ciKey:'quincena.clientCi',sessionKey:'quincena.auth',bucket:'documentos',
   load(){
-    this.url=this.DEFAULT_URL;this.code=this.DEFAULT_CODE;this.enabled=true;
-    try{const c=JSON.parse(localStorage.getItem(this.cfgKey)||'null');if(c&&(c.url||c.code)){this.url=c.url||this.DEFAULT_URL;this.code=c.code||this.DEFAULT_CODE;this.enabled=c.enabled!==false}}catch(e){}
-    try{this.clientId=localStorage.getItem(this.clientKey)||''}catch(e){}
-    try{const q=new URLSearchParams(location.search).get('api');if(q&&/^https?:\/\//i.test(q)){this.url=q;this.enabled=true;this.persist()}}catch(e){}
+    this.url=String(this.cfg.url||'').trim();
+    // Versiones anteriores guardaban la contraseña en el navegador: se borra.
+    try{localStorage.removeItem('quincena.clientPass');localStorage.removeItem('quincena.server')}catch(e){}
+    if(!this.url||!this.cfg.anonKey||typeof supabase==='undefined'||!supabase||typeof supabase.createClient!=='function')return;
+    try{this.sb=supabase.createClient(this.url,this.cfg.anonKey,{auth:{persistSession:true,autoRefreshToken:true,storageKey:this.sessionKey}})}catch(e){this.sb=null}
   },
-  persist(){try{localStorage.setItem(this.cfgKey,JSON.stringify({url:this.url,code:this.code,enabled:this.enabled}))}catch(e){}},
-  statePath(){if(ui.role==='prestamista')return this.activeClientId?'/api/clients/'+encodeURIComponent(this.activeClientId)+'/state':null;return this.clientId?'/api/state':null;},
-  /* El cobrador trabaja con los expedientes de sus clientes, igual que el administrador con los de todos. */
-  isStaff(){return !!this.staffToken},
-  base(){const u=String(this.url||'').trim().replace(/\/+$/,'');return u||location.origin},
-  tok(){return this.staffToken||this.tokens.cliente},
-  async req(path,o={}){
-    // Render gratis duerme el servicio: el primer intento puede tardar hasta un minuto en despertarlo.
-    const c=new AbortController(),to=setTimeout(()=>c.abort(),o.timeout||25000);
-    try{
-      const hd={};
-      if(o.body!=null)hd['Content-Type']='application/json';
-      if(!o.noauth){const t=this.tok();if(t)hd.Authorization='Bearer '+t}
-      const r=await fetch(this.base()+path,{method:o.method||'GET',headers:hd,body:o.body!=null?JSON.stringify(o.body):undefined,signal:c.signal});
-      let data=null;try{data=await r.json()}catch(e){}
-      return{status:r.status,data};
-    }finally{clearTimeout(to)}
+  configured(){return !!this.sb},
+  hasSavedSession(){try{return !!localStorage.getItem(this.sessionKey)}catch(e){return false}},
+  isStaff(){return false},
+  /* La cédula es el usuario: V-12345678 → v12345678@clientes.quincena.app (correo interno, no se envía nada). */
+  emailFor(ci){let k=String(ci||'').toUpperCase().replace(/[^A-Z0-9]/g,'');if(/^\d/.test(k))k='V'+k;return k.toLowerCase()+'@clientes.quincena.app'},
+  errMsg(e,fallback){
+    const m=String((e&&(e.message||e.error_description||e.error))||'');
+    if(/Invalid login credentials/i.test(m))return 'Cédula o contraseña incorrectas.';
+    if(/already registered|already been registered|already exists/i.test(m))return 'Esa cédula ya tiene cuenta. Inicia sesión con tu cédula y contraseña.';
+    if(/Email not confirmed/i.test(m))return 'La cuenta espera confirmación por correo. El administrador debe desactivar «Confirm email» en Supabase.';
+    if(/rate limit|too many/i.test(m))return 'Demasiados intentos. Espera unos minutos.';
+    if(/Password should be/i.test(m))return 'La contraseña es demasiado corta o sencilla.';
+    if(/Failed to fetch|NetworkError|Load failed|network/i.test(m))return 'Sin conexión con el servidor. Revisa tu internet e inténtalo de nuevo.';
+    if(/JWT|not authenticated/i.test(m))return 'Tu sesión caducó. Vuelve a entrar.';
+    return m||fallback||'No se pudo completar la acción.';
   },
-  async loginClient(){
-    const saved=this.loadPass();
-    if(!this.clientId&&!(saved.ci&&saved.pass))return true; // sin cuenta todavía: solo el código de acceso
-    const body=saved.ci&&saved.pass?{role:'cliente',code:this.code,ci:saved.ci,password:saved.pass}:{role:'cliente',code:this.code,clientId:this.clientId};
-    const a=await this.req('/api/auth',{method:'POST',noauth:true,body});
-    if(a.status===200&&a.data&&a.data.token){
-      this.tokens.cliente=a.data.token;
-      if(a.data.clientId){this.clientId=a.data.clientId;try{localStorage.setItem(this.clientKey,this.clientId)}catch(e){}}
-      if(a.data.state&&a.data.version){this.on=true;this.ver=a.data.version;S=a.data.state;SHIFT=S.shift||0;try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
-      return true;
-    }
-    if(a.status===401&&saved.ci&&saved.pass){this.clearPass();this.status='auth'}
-    if(a.status===404&&this.clientId){try{localStorage.removeItem(this.clientKey)}catch(e){}this.clientId=''}
-    return false;
+  loadPass(){try{return {ci:localStorage.getItem(this.ciKey)||''}}catch(e){return {}}},
+  savePass(ci){try{localStorage.setItem(this.ciKey,String(ci||'').toUpperCase())}catch(e){}},
+  clearPass(){},
+  cache(){if(ui.role==='cliente'&&this.clientId){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}},
+  currentId(){return ui.role==='prestamista'?this.activeClientId:this.clientId},
+  statePath(){return this.currentId()||null},
+  tok(){return this.on?'supabase':''},
+  base(){return this.url||location.origin},
+  /* Sube una imagen (data URL) a la carpeta privada del cliente y devuelve la referencia "sb:carpeta/archivo". */
+  async putImage(folder,dataUrl,prefix){
+    if(!this.sb||!folder)throw new Error('Sin conexión con el servidor.');
+    const blob=await (await fetch(dataUrl)).blob();
+    const type=/^image\/(jpeg|png|webp)$/.test(blob.type)?blob.type:'image/jpeg';
+    const ext=type==='image/png'?'png':type==='image/webp'?'webp':'jpg';
+    const rnd=(crypto&&crypto.randomUUID)?crypto.randomUUID():Date.now()+'-'+Math.random().toString(16).slice(2);
+    const path=folder+'/'+(prefix||'img')+'-'+rnd+'.'+ext;
+    const {error}=await this.sb.storage.from(this.bucket).upload(path,blob,{contentType:type,upsert:false});
+    if(error)throw error;
+    return 'sb:'+path;
   },
-  /* Cédula y contraseña de la cuenta del cliente: sirven para entrar desde cualquier teléfono o navegador. */
-  passKey:'quincena.clientPass',
-  loadPass(){try{return JSON.parse(localStorage.getItem(this.passKey)||'null')||{}}catch(e){return {}}},
-  savePass(ci,pass){try{localStorage.setItem(this.passKey,JSON.stringify({ci:String(ci||'').toUpperCase(),pass:String(pass||'')}))}catch(e){}},
-  clearPass(){try{localStorage.removeItem(this.passKey)}catch(e){}},
+  async signedUrl(ref){
+    const path=String(ref||'').replace(/^sb:/,'');
+    const {data,error}=await this.sb.storage.from(this.bucket).createSignedUrl(path,3600);
+    if(error||!data)throw error||new Error('Imagen no disponible');
+    return data.signedUrl;
+  },
+  /* Crear cuenta: usuario de Supabase (cédula + contraseña), fotos al almacenamiento privado y expediente. */
   async signup(ci,pass){
-    if(!this.on||!this.url)return {ok:false,error:'Conéctate primero al servidor.'};
-    const r=await this.req('/api/register',{method:'POST',body:{state:S,password:pass}});
-    if(r.status===201&&r.data&&r.data.clientId){
-      this.clientId=r.data.clientId;this.tokens.cliente=r.data.token;this.ver=r.data.version||1;this.savePass(ci,pass);
-      try{localStorage.setItem(this.clientKey,this.clientId)}catch(e){}
-      this.persist();this.status='online';this.startPoll();return {ok:true};
-    }
-    const err=(r.data&&r.data.error)||'No se pudo crear la cuenta en el servidor.';
-    if(r.status===409)return {ok:false,error:'Esa cédula ya tiene cuenta. Inicia sesión con tu cédula y contraseña.'};
-    return {ok:false,error:err};
+    if(!this.sb)return {ok:false,error:'La app aún no está conectada a Supabase. Avísale al prestamista.'};
+    const email=this.emailFor(ci), name=String(S.user.fullName||S.user.name||'').trim();
+    try{
+      let uid=null;
+      const r=await this.sb.auth.signUp({email,password:pass,options:{data:{full_name:name,ci}}});
+      if(r.error){
+        if(!/already registered|already been registered|already exists/i.test(r.error.message))return {ok:false,error:this.errMsg(r.error,'No se pudo crear la cuenta.')};
+        // Registro anterior a medias: con la misma contraseña se completa; si ya hay expediente, toca iniciar sesión.
+        const li=await this.sb.auth.signInWithPassword({email,password:pass});
+        if(li.error)return {ok:false,error:'Esa cédula ya tiene cuenta. Inicia sesión con tu cédula y contraseña.'};
+        uid=li.data.user.id;
+        const ex=await this.sb.from('clients').select('id').eq('id',uid).maybeSingle();
+        if(ex.data){await this.sb.auth.signOut();return {ok:false,error:'Esa cédula ya tiene cuenta. Inicia sesión con tu cédula y contraseña.'}}
+      }else{
+        if(!r.data||!r.data.session)return {ok:false,error:'La cuenta quedó esperando confirmación por correo. El administrador debe desactivar «Confirm email» en Supabase (Authentication → Sign In / Providers → Email) y luego podrás crearla.'};
+        uid=r.data.user.id;
+      }
+      const docs=Object.assign({},S.user.identityDocs||{});
+      for(const k of ['front','back','selfie'])if(docs[k]&&/^data:image\//.test(docs[k]))docs[k]=await this.putImage(uid,docs[k],k);
+      S.user.identityDocs=docs;
+      const ins=await this.sb.from('clients').insert({id:uid,name,ci,state:S}).select('version,state').single();
+      if(ins.error)throw ins.error;
+      this.clientId=uid;this.savePass(ci);this.on=true;this.status='online';
+      this.ver=ins.data.version;S=ins.data.state;SHIFT=S.shift||0;this.cache();this.startPoll();
+      return {ok:true};
+    }catch(e){return {ok:false,error:this.errMsg(e,'No se pudo crear la cuenta.')}}
   },
   async login(ci,pass){
-    if(!this.on||!this.url)return {ok:false,error:'Conéctate primero al servidor.'};
-    const r=await this.req('/api/auth',{method:'POST',noauth:true,body:{role:'cliente',code:this.code,ci,password:pass}});
-    if(r.status===200&&r.data&&r.data.token){
-      this.tokens.cliente=r.data.token;this.clientId=r.data.clientId;this.ver=r.data.version||0;this.savePass(ci,pass);
-      try{localStorage.setItem(this.clientKey,this.clientId)}catch(e){}
-      if(r.data.state){S=r.data.state;SHIFT=S.shift||0;try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
-      this.status='online';this.startPoll();return {ok:true};
-    }
-    if(r.status===401)return {ok:false,error:'Cédula o contraseña incorrectas.'};
-    if(r.status===429)return {ok:false,error:'Demasiados intentos. Espera unos minutos.'};
-    return {ok:false,error:(r.data&&r.data.error)||'No se pudo iniciar sesión.'};
-  },
-  logoutClient(){this.clearPass();this.stop();try{localStorage.removeItem(this.clientKey)}catch(e){}this.clientId='';this.tokens.cliente=''},
-  async registerAccount(){
-    if(!this.on||this.clientId)return !!this.clientId;
-    const pass=this.loadPass().pass;if(!pass)return false;
-    const r=await this.req('/api/register',{method:'POST',body:{state:S,password:pass}});
-    if(r.status===201&&r.data&&r.data.clientId&&r.data.token){
-      this.clientId=r.data.clientId;this.tokens.cliente=r.data.token;this.ver=r.data.version||1;
-      try{localStorage.setItem(this.clientKey,this.clientId)}catch(e){}
-      this.persist();this.status='online';return true;
-    }
-    this.status=r.status===409?'account-exists':r.status===0?'offline':'registration-error';
-    toast((r.data&&r.data.error)||'No se pudo registrar el cliente en el servidor.');return false;
-  },
-  async fetchClients(){
-    if(!this.on||!ui.unlocked)return [];
-    try{const r=await this.req('/api/clients');if(r.status===200&&r.data&&Array.isArray(r.data.clients)){this.clients=r.data.clients;return this.clients}if(r.status===401)await this.unauthorized()}catch(e){}
-    return this.clients||[];
-  },
-  async selectClient(id, opts={}){
-    if(!id)return false;
-    // Vacía cualquier escritura pendiente en el expediente anterior antes de cambiar el identificador activo.
-    if(this.activeClientId&&this.activeClientId!==id){
-      let needsFlush=!!this.timer; if(this.timer){clearTimeout(this.timer);this.timer=null;}
-      while(this.busy)await new Promise(resolve=>setTimeout(resolve,20));
-      if(this.timer){clearTimeout(this.timer);this.timer=null;needsFlush=true;}
-      if(this.again){this.again=false;needsFlush=true;}
-      if(needsFlush)await this.push();
-    }
-    const r=await this.req('/api/clients/'+encodeURIComponent(id)+'/state');
-    if(r.status!==200||!r.data||!r.data.state){toast((r.data&&r.data.error)||'No se pudo abrir el expediente.');return false}
-    this.activeClientId=id;this.ver=r.data.version||0;S=r.data.state;SHIFT=S.shift||0;this.pending=null;
-    if(opts.render!==false){render();renderSheet()}
-    return true;
-  },
-  async connect(){
-    if(this.enabled===false||typeof fetch!=='function')return false;
-    if(!this.url&&!/^https?:$/.test(location.protocol))return false;
+    if(!this.sb)return {ok:false,error:'La app aún no está conectada a Supabase. Avísale al prestamista.'};
     try{
-      // Tres intentos: el servidor dormido tarda en responder la primera vez.
-      let h=null;
-      for(let i=0;i<3;i++){
-        h=await this.req('/api/health',{noauth:true,timeout:25000});
-        if(h.status===200&&h.data&&h.data.quincena)break;
-        await new Promise(r=>setTimeout(r,1500*(i+1)));
-      }
-      if(!h||h.status!==200||!h.data||!h.data.quincena){this.on=false;this.status='offline';this.scheduleRetry();return false}
-      if(!(await this.loginClient())){this.on=false;this.status='auth';return false}
-      this.on=true;this.status='online';
-      if(this.clientId){await this.pull(true)}
-      else if(typeof isRegistered==='function'&&isRegistered()){
-        // Cuenta guardada localmente antes de habilitar varios clientes: se migra con la contraseña que elija el cliente.
-        if(this.loadPass().pass)await this.registerAccount();
-      }
+      const r=await this.sb.auth.signInWithPassword({email:this.emailFor(ci),password:pass});
+      if(r.error)return {ok:false,error:this.errMsg(r.error,'No se pudo iniciar sesión.')};
+      const row=await this.sb.from('clients').select('id,version,state').eq('id',r.data.user.id).maybeSingle();
+      if(row.error)return {ok:false,error:this.errMsg(row.error,'No se pudo abrir tu expediente.')};
+      if(!row.data){await this.sb.auth.signOut();return {ok:false,error:'Tu registro quedó incompleto. Pulsa «Crear cuenta» y repítelo con la misma cédula y contraseña.'}}
+      this.clientId=row.data.id;this.savePass(ci);this.on=true;this.status='online';
+      this.ver=row.data.version;S=row.data.state;SHIFT=S.shift||0;this.cache();this.startPoll();
+      return {ok:true};
+    }catch(e){return {ok:false,error:this.errMsg(e,'No se pudo iniciar sesión.')}}
+  },
+  async logoutClient(){this.stop();this.clientId='';this.ver=0;this.pending=null;try{if(this.sb)await this.sb.auth.signOut()}catch(e){}},
+  /* El personal trabaja en /admin.html; desde la app del cliente no se abren expedientes ajenos. */
+  async fetchClients(){return this.clients||[]},
+  async selectClient(){toast('El panel del prestamista está en /admin.html.');return false},
+  /* Al abrir la app: si hay sesión guardada, se carga el expediente del cliente. */
+  async connect(){
+    if(!this.sb){this.on=false;this.status='local';return false}
+    try{
+      const {data}=await this.sb.auth.getSession();
+      const sess=data&&data.session;
+      if(!sess){this.on=false;this.status='auth';return false}
+      const row=await this.sb.from('clients').select('id,version,state').eq('id',sess.user.id).maybeSingle();
+      if(row.error)throw row.error;
+      if(!row.data){this.on=false;this.status='auth';return false}
+      this.clientId=row.data.id;this.on=true;this.status='online';
+      this.apply({version:row.data.version,state:row.data.state});
       this.startPoll();
       return true;
     }catch(e){this.on=false;this.status='offline';this.scheduleRetry();return false}
   },
-  /* Reintento automático: si el servidor está despertando, se vuelve a intentar solo. */
-  retryTimer:null,
-  scheduleRetry(){clearTimeout(this.retryTimer);this.retryTimer=setTimeout(()=>{this.connect().then(ok=>{if(ok&&typeof hydratePrivateImages==='function')hydratePrivateImages(document);if(ok&&ui.sheet&&ui.sheet.type==='authHome')renderSheet()})},8000)},
+  scheduleRetry(){clearTimeout(this.retryTimer);this.retryTimer=setTimeout(()=>{this.connect().then(ok=>{if(ok)afterConnect()})},10000)},
   startPoll(){
     clearInterval(this.poll);
     this.poll=setInterval(()=>{
@@ -770,61 +750,66 @@ const Backend={
       this.pull().catch(()=>{this.status='offline'});
     },8000);
   },
-  stop(){clearInterval(this.poll);clearTimeout(this.timer);this.on=false},
+  stop(){clearInterval(this.poll);clearTimeout(this.timer);clearTimeout(this.retryTimer);this.on=false},
   apply(d){
     if(!d||!d.state||d.state.v!==3)return;
     S=d.state;this.ver=d.version;SHIFT=S.shift||0;this.pending=null;
-    if(ui.role==='cliente'&&this.clientId){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}}
-    render();renderSheet();
+    this.cache();render();renderSheet();
   },
   async pull(first){
-    const path=this.statePath();if(!path)return;
-    const r=await this.req(path+'?since='+this.ver);
-    if(r.status===401){await this.unauthorized();return}
-    if(r.status!==200||!r.data)return;
+    const id=this.currentId();if(!id||!this.sb)return;
+    const {data,error}=await this.sb.from('clients').select('version,state').eq('id',id).gt('version',this.ver).maybeSingle();
+    if(error){if(/JWT|auth/i.test(error.message||''))await this.unauthorized();else this.status='offline';return}
     this.status='online';
-    const d=r.data;
-    if(d.unchanged)return;
-    if(d.state==null){if(first)await this.push();return}
-    if(d.version===this.ver)return;
-    if(ui.sheet&&!first){this.pending=d;return}
-    this.apply(d);
+    if(!data)return;
+    if(ui.sheet&&!first){this.pending=data;return}
+    this.apply(data);
   },
   async refresh(){
-    const path=this.statePath();if(!path)return;
-    const r=await this.req(path);
-    if(r.status===200&&r.data&&r.data.state)this.apply(r.data);
+    const id=this.currentId();if(!id||!this.sb)return;
+    const {data}=await this.sb.from('clients').select('version,state').eq('id',id).maybeSingle();
+    if(data)this.apply(data);
   },
-  queue(){if(!this.on||!this.statePath())return;clearTimeout(this.timer);this.timer=setTimeout(()=>{this.timer=null;this.push()},350)},
+  queue(){if(!this.on||!this.currentId())return;clearTimeout(this.timer);this.timer=setTimeout(()=>{this.timer=null;this.push()},350)},
+  /* Guarda el expediente con control de versión: si otro dispositivo (o el prestamista) lo cambió antes, se recarga. */
   async push(){
-    if(!this.on||!this.statePath())return;
+    if(!this.on||!this.currentId())return;
     if(this.busy){this.again=true;return}
     this.busy=true;
     try{
-      const r=await this.req(this.statePath(),{method:'PUT',body:{version:this.ver,state:S}});
-      if(r.status===200&&r.data){this.ver=r.data.version;this.status='online'}
-      else if(r.status===409&&r.data&&r.data.current&&r.data.current.state){this.apply(r.data.current);toast('Se actualizó desde otro dispositivo. Repite tu última acción.')}
-      else if(r.status===403){toast((r.data&&r.data.error)||'Acción no permitida.');await this.refresh()}
-      else if(r.status===401){await this.unauthorized()}
-      else if(r.status===413){toast('Los datos son demasiado grandes para el servidor.')}
+      const {data,error}=await this.sb.from('clients').update({state:S}).eq('id',this.currentId()).eq('version',this.ver).select('version');
+      if(error){
+        if(/JWT|auth/i.test(error.message||''))await this.unauthorized();
+        else{toast(this.errMsg(error,'Acción no permitida.'));await this.refresh()}
+      }else if(data&&data.length){this.ver=data[0].version;this.status='online'}
+      else{await this.refresh();toast('Tu expediente se actualizó desde otro dispositivo. Repite tu última acción.')}
     }catch(e){this.status='offline'}
     finally{this.busy=false;if(this.again){this.again=false;this.queue()}}
   },
-  async upload(dataUrl){
-    const r=await this.req('/api/upload',{method:'POST',body:{dataUrl}});
-    if(r.status===200&&r.data&&r.data.url)return this.base()+r.data.url;
-    if(r.status===401)await this.unauthorized();
-    throw new Error('upload');
-  },
+  async upload(dataUrl){return await this.putImage(this.currentId(),dataUrl,'comprobante')},
   async unauthorized(){
-    if(this.staffToken){
-      this.staffToken='';ui.unlocked=false;ui.role='cliente';render();
-      toast('Tu sesión del panel caducó. Vuelve a entrar con tu usuario y contraseña en /admin.html.');return;
-    }
-    if(!(await this.loginClient())){this.status='auth';this.stop()}
+    this.stop();this.status='auth';
+    ui.err='Tu sesión caducó. Vuelve a entrar con tu cédula y contraseña.';ui.sheet={type:'authHome'};render();renderSheet();
   }
 };
 Backend.load();
+/* Pantalla de entrada: con Supabase, se pide la cuenta si no hay una sesión guardada. */
+if(Backend.configured()){
+  if(!isRegistered()||!Backend.hasSavedSession())ui.sheet={type:'authHome'};
+  else if(!S.user.tutorialDone)ui.sheet={type:'tutorial',step:0};
+}else{
+  const savedSession=normalizeEmail(readAuthSession());
+  const savedAccountEmail=normalizeEmail((S.user.profile||{}).email||'');
+  if(!isRegistered())ui.sheet={type:'authHome'};
+  else if(!savedSession||!savedAccountEmail||savedSession!==savedAccountEmail)ui.sheet={type:'authHome'};
+  else if(!S.user.tutorialDone)ui.sheet={type:'tutorial',step:0};
+}
+/* Tras conectar: cierra la pantalla de entrada si la sesión era válida y la muestra si caducó. */
+function afterConnect(){
+  if(Backend.on&&ui.sheet&&ui.sheet.type==='authHome'){ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};render();renderSheet()}
+  else if(Backend.configured()&&!Backend.on&&Backend.status==='auth'&&!(ui.sheet&&['authHome','signup','tutorial'].includes(ui.sheet.type))){ui.sheet={type:'authHome'};renderSheet()}
+  hydratePrivateImages(document);
+}
 
 /* ============ cálculos ============ */
 const level=()=>{let L=LEVELS[0];LEVELS.forEach(l=>{if(S.user.points>=l.min)L=l});return L};
@@ -881,7 +866,7 @@ const notify=(to,text)=>{S.notes.unshift({id:S.seq++,to,text,date:today(),read:f
 function firstName(){return String((S.user&&S.user.name)||'').trim().split(/\s+/)[0]||''}
 function isRegistered(){return !!(S.user.registered||((S.user.profile||{}).ci&&String(S.user.fullName||S.user.name||'').trim().includes(' ')))}
 const identityDocs=()=>S.user.identityDocs||{};
-const identityDocsReady=(d=identityDocs())=>!!(d.front&&d.back&&d.selfie);
+const identityDocsReady=(d=identityDocs())=>!!(d.front&&d.selfie);
 const creditReview=()=>S.user.creditLineReview||{status:'pending',limit:0,requestedAt:S.user.createdAt||today(),reviewedAt:null,reason:''};
 const creditApproved=()=>creditReview().status==='approved';
 const approvedLimit=()=>creditApproved()?Math.max(0,Math.min(Number(creditReview().limit)||level().limit,level().limit)):0;
@@ -1190,10 +1175,16 @@ function validBackup(o){
 
 /* ============ desembolso (comprobante que sube el prestamista), datos de pago móvil guardados y seguridad de imágenes ============ */
 /* Solo se aceptan imágenes en data URL o enlaces del propio servidor / https: evita inyectar código a través de un "comprobante" manipulado */
-const safeSrc=u=>/^(data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+\/=]+|https?:\/\/[^\s"'<>]+|\/uploads\/[0-9a-f]{32}\.(?:jpg|png|webp))$/.test(String(u||''))?String(u):'';
+const safeSrc=u=>/^(data:image\/(?:jpeg|png|webp|gif);base64,[A-Za-z0-9+\/=]+|https?:\/\/[^\s"'<>]+|\/uploads\/[0-9a-f]{32}\.(?:jpg|png|webp)|sb:[0-9a-f-]{36}\/[A-Za-z0-9._-]+)$/.test(String(u||''))?String(u):'';
 /* Las imágenes guardadas en el backend se leen con un token Bearer. Nunca se dejan accesibles como archivos públicos. */
 async function hydratePrivateImages(root=document){
   if(!Backend.on||!Backend.tok()||!root||!root.querySelectorAll)return;
+  /* Supabase Storage (bucket privado): se pide un enlace firmado que caduca en una hora. */
+  for(const img of root.querySelectorAll('img[src^="sb:"]:not([data-private-image])')){
+    const ref=img.getAttribute('src')||'';img.dataset.privateImage='loading';img.removeAttribute('src');
+    try{img.src=await Backend.signedUrl(ref);img.dataset.privateImage='loaded'}
+    catch(_){img.dataset.privateImage='error';img.alt='Imagen protegida: vuelve a iniciar sesión para verla.'}
+  }
   for(const img of root.querySelectorAll('img[src*="/uploads/"]:not([data-private-image])')){
     const raw=img.getAttribute('src')||'';
     let u;try{u=new URL(raw,Backend.base()||location.href)}catch(_){continue}
@@ -1285,7 +1276,7 @@ function vHistorial(){
   if(cl.length>1)h+='<button class="profile-edit-back" data-a="histBack">'+svg('back')+' Todos los clientes</button>';
   h+='<section class="card stack"><div class="hist-head"><div class="hist-av">'+esc(nameInitials(u.name))+'</div><div class="grow"><h2 style="margin:0">'+esc(u.name||'Sin nombre')+'</h2><div class="small muted">C.I. '+esc(clientCI(u)||'Sin cédula')+'</div></div><span class="pill sea">'+esc(level().name)+'</span></div>'+
     '<div class="small muted">'+(u.createdAt?'Cuenta creada el '+fmtD(u.createdAt)+' · ':'')+(Number(u.points)||0)+' puntos · racha de '+(Number(u.streak)||0)+' días</div></section>'+
-    (function(){const d=identityDocs(),cr=creditReview(),ready=identityDocsReady(d);return '<section class="card stack"><div class="row"><h2>Identidad y línea de crédito</h2><span class="pill '+(cr.status==='approved'?'ok':cr.status==='rejected'?'bad':'warn')+'">'+esc(creditStatusLabel(cr.status))+'</span></div><p class="small muted" style="margin:0">Revisa las tres imágenes antes de decidir sobre la línea del cliente.</p>'+ (ready?'<div class="stack" style="gap:8px"><button class="proof" data-a="viewIdentityDoc" data-v="front"><img src="'+esc(safeSrc(d.front))+'" alt="Parte delantera de la cédula"><span><b>Cédula · parte delantera</b><br><span class="small muted">Toca para ampliar</span></span></button><button class="proof" data-a="viewIdentityDoc" data-v="back"><img src="'+esc(safeSrc(d.back))+'" alt="Parte trasera de la cédula"><span><b>Cédula · parte trasera</b><br><span class="small muted">Toca para ampliar</span></span></button><button class="proof" data-a="viewIdentityDoc" data-v="selfie"><img src="'+esc(safeSrc(d.selfie))+'" alt="Selfie de identidad"><span><b>Foto del rostro</b><br><span class="small muted">Toca para ampliar</span></span></button></div>':'<div class="info">Este cliente aún no ha enviado las tres imágenes requeridas. No apruebes la línea hasta completar la verificación.</div>')+ (cr.status==='approved'?'<div class="kv"><span class="muted">Límite aprobado</span><b>'+money(approvedLimit())+'</b></div>':cr.status==='rejected'?'<div class="info">Motivo: '+esc(cr.reason||'No especificado')+'</div>':'')+ (ready&&cr.status!=='approved'?'<div class="field"><label class="label" for="creditLineAmount">Límite a aprobar (máximo del nivel: '+money(level().limit)+')</label><input type="number" id="creditLineAmount" min="10" max="'+level().limit+'" step="5" value="'+Math.min(level().limit,Math.max(10,Number(cr.limit)||level().limit))+'"></div><div class="row"><button class="btn bad sm" data-a="creditReject">No aprobar</button><button class="btn sm" data-a="creditApprove">Aprobar línea</button></div>':'')+ (cr.status==='approved'?'<button class="btn ghost" data-a="creditReopen">Revisar línea nuevamente</button>':'')+'</section>'})()+
+    (function(){const d=identityDocs(),cr=creditReview(),ready=identityDocsReady(d);return '<section class="card stack"><div class="row"><h2>Identidad y línea de crédito</h2><span class="pill '+(cr.status==='approved'?'ok':cr.status==='rejected'?'bad':'warn')+'">'+esc(creditStatusLabel(cr.status))+'</span></div><p class="small muted" style="margin:0">Revisa la cédula y la foto del rostro antes de decidir sobre la línea del cliente.</p>'+ (ready?'<div class="stack" style="gap:8px"><button class="proof" data-a="viewIdentityDoc" data-v="front"><img src="'+esc(safeSrc(d.front))+'" alt="Parte delantera de la cédula"><span><b>Cédula · parte delantera</b><br><span class="small muted">Toca para ampliar</span></span></button>'+(d.back?'<button class="proof" data-a="viewIdentityDoc" data-v="back"><img src="'+esc(safeSrc(d.back))+'" alt="Parte trasera de la cédula"><span><b>Cédula · parte trasera</b><br><span class="small muted">Toca para ampliar</span></span></button>':'')+'<button class="proof" data-a="viewIdentityDoc" data-v="selfie"><img src="'+esc(safeSrc(d.selfie))+'" alt="Selfie de identidad"><span><b>Foto del rostro</b><br><span class="small muted">Toca para ampliar</span></span></button></div>':'<div class="info">Este cliente aún no ha enviado la foto de la cédula y la del rostro. No apruebes la línea hasta completar la verificación.</div>')+ (cr.status==='approved'?'<div class="kv"><span class="muted">Límite aprobado</span><b>'+money(approvedLimit())+'</b></div>':cr.status==='rejected'?'<div class="info">Motivo: '+esc(cr.reason||'No especificado')+'</div>':'')+ (ready&&cr.status!=='approved'?'<div class="field"><label class="label" for="creditLineAmount">Límite a aprobar (máximo del nivel: '+money(level().limit)+')</label><input type="number" id="creditLineAmount" min="10" max="'+level().limit+'" step="5" value="'+Math.min(level().limit,Math.max(10,Number(cr.limit)||level().limit))+'"></div><div class="row"><button class="btn bad sm" data-a="creditReject">No aprobar</button><button class="btn sm" data-a="creditApprove">Aprobar línea</button></div>':'')+ (cr.status==='approved'?'<button class="btn ghost" data-a="creditReopen">Revisar línea nuevamente</button>':'')+'</section>'})()+
     '<div class="grid2"><div class="tile"><span class="label">Préstamos pedidos</span>",<b>'+st.pedidos+'</b></div><div class="tile"><span class="label">Pagados</span><b>'+st.pagados+'</b></div><div class="tile"><span class="label">Por pagar</span><b>'+money(st.porPagar)+'</b></div><div class="tile"><span class="label">Total pagado</span><b>'+money(st.pagado)+'</b></div></div>';
   const bu=petUsesMonth(/Burbujita activ/i), mi=petUsesMonth(/Michi (redujo|quedó)/i);
   h+='<section class="card stack"><h2>Mascotas · '+mes+'</h2>'+
@@ -1367,8 +1358,8 @@ function sheetHTML(){
       '<div class="field"><label class="label" for="clCI">Cédula de identidad</label><input type="text" id="clCI" autocomplete="username" inputmode="text" placeholder="V-12345678" value="'+esc(Backend.loadPass().ci||'')+'"></div>'+
       '<div class="field"><label class="label" for="clPass">Contraseña</label><input type="password" id="clPass" autocomplete="current-password" minlength="8" placeholder="Tu contraseña"></div>'+
       '<div class="err" id="clErr" role="alert">'+esc(ui.err||'')+'</div>'+
-      '<button class="btn" data-a="clientLogin">Entrar</button><button class="btn ghost" data-a="authCreate">Crear cuenta</button><button class="btn ghost" data-a="close">Seguir sin cuenta (solo este dispositivo)</button>'+
-      '<div class="auth-note">'+(Backend.url?'':'Sin servidor configurado: esta copia funciona solo en este dispositivo. ')+'La contraseña la eliges al crear la cuenta y sirve para entrar desde cualquier dispositivo.</div>';
+      '<button class="btn" data-a="clientLogin">Entrar</button><button class="btn ghost" data-a="authCreate">Crear cuenta</button>'+
+      '<div class="auth-note">'+(Backend.configured()?'':'Sin servidor configurado: esta copia funciona solo en este dispositivo. ')+'La contraseña la eliges al crear la cuenta y sirve para entrar desde cualquier dispositivo.</div>';
   }
   if(s.type==='signupEmail'){
     body='<h2>Crear cuenta</h2><p class="muted" style="margin:0">Primero confirma tu correo electrónico. Después podrás completar tus datos personales.</p><div class="field"><label class="label" for="authEmail">Correo electrónico</label><input type="email" id="authEmail" autocomplete="email" inputmode="email" required placeholder="correo@ejemplo.com" value="'+esc(ui.emailDraft||'')+'"></div><div class="err" id="authErr" role="alert">'+esc(ui.err||'')+'</div><button class="btn" data-a="authSendSignupCode">Enviar código de confirmación</button><button class="btn ghost" data-a="authBack">Volver</button>';
@@ -1385,11 +1376,11 @@ function sheetHTML(){
     body='<div class="logo-hero" role="img" aria-label="Quincena"></div><h2 style="text-align:center">Completa tu cuenta</h2><p class="muted" style="margin:0;text-align:center">Completa tus datos tal como aparecen en tu documento y elige la contraseña de tu cuenta.</p><div class="auth-note">Con tu cédula y esta contraseña podrás entrar desde cualquier teléfono o navegador.</div>'+
       '<div class="field"><label class="label" for="suName">Nombre completo</label><input type="text" id="suName" autocomplete="name" placeholder="Ej. Carlos Andrés Pérez" value="'+esc(pre)+'"></div>'+
       '<div class="field"><label class="label" for="suCI">Cédula de identidad</label><input type="text" id="suCI" inputmode="text" autocomplete="off" placeholder="V-12345678" value="'+esc((S.user.profile||{}).ci||'')+'"></div>'+ 
-      '<div class="info"><b>Verificación para la línea de crédito</b><br>Debes adjuntar una foto clara de cada lado de tu cédula y una selfie de tu cara. El prestamista revisará estos documentos para decidir si aprueba tu línea.</div>'+
+      '<div class="info"><b>Verificación para la línea de crédito</b><br>Debes adjuntar una foto clara de tu cédula y una foto de tu rostro (selfie). El prestamista revisará estos documentos para decidir si aprueba tu línea.</div>'+
       '<div class="field"><label class="label" for="suPass">Contraseña de tu cuenta</label><input type="password" id="suPass" minlength="8" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></div>'+ 
       '<div class="field"><label class="label" for="suPass2">Repite la contraseña</label><input type="password" id="suPass2" minlength="8" autocomplete="new-password" placeholder="Otra vez"></div>'+ 
-      '<div class="field"><label class="label" for="suFront">Cédula · parte delantera</label><input type="file" id="suFront" accept="image/*" capture="environment" required></div>'+ 
-      '<div class="field"><label class="label" for="suBack">Cédula · parte trasera</label><input type="file" id="suBack" accept="image/*" capture="environment" required></div>'+ 
+      '<div class="field"><label class="label" for="suFront">Foto de tu cédula (parte delantera)</label><input type="file" id="suFront" accept="image/*" capture="environment" required></div>'+ 
+      '<div class="field"><label class="label" for="suBack">Cédula · parte trasera (opcional)</label><input type="file" id="suBack" accept="image/*" capture="environment"></div>'+ 
       '<div class="field"><label class="label" for="suSelfie">Foto de tu cara (selfie)</label><input type="file" id="suSelfie" accept="image/*" capture="user" required></div>'+ 
       '<div class="small muted">Usaremos estas fotos únicamente para la verificación de tu identidad y revisión de la línea de crédito. Elige imágenes claras.</div>'+ 
       '<div class="err" id="suerr" role="alert"></div><button class="btn" data-a="signupSave">Crear cuenta</button>';
@@ -1460,9 +1451,9 @@ function sheetHTML(){
   }
   if(s.type==='profileDocs'){
     const d=identityDocs();
-    body='<h2>Verificación de identidad</h2><p class="muted" style="margin:0">Adjunta una foto clara de ambos lados de tu cédula y una selfie. El prestamista las revisará para decidir sobre tu línea de crédito.</p>'+ 
+    body='<h2>Verificación de identidad</h2><p class="muted" style="margin:0">Adjunta una foto clara de tu cédula y una foto de tu rostro (selfie). El prestamista las revisará para decidir sobre tu línea de crédito.</p>'+ 
       '<div class="field"><label class="label" for="docFront">Cédula · parte delantera</label><input type="file" id="docFront" accept="image/*" capture="environment" '+(d.front?'':'required')+'><div class="small muted">'+(d.front?'Imagen guardada; no es necesario volver a subirla.':'Obligatorio')+'</div></div>'+ 
-      '<div class="field"><label class="label" for="docBack">Cédula · parte trasera</label><input type="file" id="docBack" accept="image/*" capture="environment" '+(d.back?'':'required')+'><div class="small muted">'+(d.back?'Imagen guardada; no es necesario volver a subirla.':'Obligatorio')+'</div></div>'+ 
+      '<div class="field"><label class="label" for="docBack">Cédula · parte trasera (opcional)</label><input type="file" id="docBack" accept="image/*" capture="environment"><div class="small muted">'+(d.back?'Imagen guardada; no es necesario volver a subirla.':'Opcional')+'</div></div>'+ 
       '<div class="field"><label class="label" for="docSelfie">Foto del rostro (selfie)</label><input type="file" id="docSelfie" accept="image/*" capture="user" '+(d.selfie?'':'required')+'><div class="small muted">'+(d.selfie?'Imagen guardada; no es necesario volver a subirla.':'Obligatorio')+'</div></div>'+ 
       '<div class="err" id="docErr" role="alert">'+esc(ui.err||'')+'</div><div class="row"><button class="btn ghost" data-a="close">Cancelar</button><button class="btn" data-a="identityDocsSave">Enviar documentos</button></div>';
   }
@@ -1499,12 +1490,8 @@ function sheetHTML(){
       '<h2>Sin comprobante</h2><p class="muted">El prestamista aún no ha adjuntado el comprobante de este desembolso.</p><button class="btn" data-a="close">Cerrar</button>';
   }
   if(s.type==='server'){
-    const st={online:'Conectado ✓',local:'Modo local (sin servidor)',offline:'Sin conexión con el servidor',auth:'Código de acceso incorrecto'}[Backend.status]||'Modo local (sin servidor)';
-    body='<h2>Conexión con el servidor</h2><p class="muted" style="margin:0">Con un servidor, el cliente y el prestamista pueden usar la app desde teléfonos distintos y las capturas dejan de ocupar el almacenamiento del navegador.</p><div class="info"><b>Estado:</b> '+st+'</div>'+
-      '<div class="field"><label class="label" for="srvUrl">Dirección del servidor</label><input type="text" id="srvUrl" inputmode="url" autocomplete="off" placeholder="https://tu-servidor.com (vacío = el mismo sitio de la app)" value="'+esc(Backend.url)+'"></div>'+
-      '<div class="field"><label class="label" for="srvCode">Código de acceso del cliente</label><input type="password" id="srvCode" autocomplete="off" value="'+esc(Backend.code)+'"></div>'+
-      '<div class="info">Si el servidor ya tiene datos, se usan esos y los de este dispositivo se reemplazan. Si está vacío, se sube lo que tienes aquí. Descarga un respaldo antes si dudas.</div>'+
-      '<div class="row"><button class="btn ghost" data-a="srvOff">Usar modo local</button><button class="btn" data-a="srvSave">Conectar</button></div><button class="btn ghost" data-a="close">Cerrar</button>';
+    const st={online:'Conectado ✓',local:'Modo local (Supabase sin configurar)',offline:'Sin conexión con el servidor',auth:'Sin sesión iniciada'}[Backend.status]||'Modo local';
+    body='<h2>Estado de la conexión</h2><p class="muted" style="margin:0">Los datos se guardan en Supabase. La configuración se hace en Vercel (SUPABASE_URL y SUPABASE_ANON_KEY), no desde la app.</p><div class="info"><b>Estado:</b> '+st+'</div><button class="btn ghost" data-a="close">Cerrar</button>';
   }
   if(s.type==='importConfirm'){
     const o=ui.importData, n=o&&o.loans?o.loans.length:0;
@@ -1615,7 +1602,11 @@ const A={
   const pr=S.user.profile||{};if(!S.user.registered||normalizeEmail(pr.email)!==a.email||normalizeCI(pr.ci||(S.user.pm||{}).ci||'')!==a.ci){ui.sheet={type:'loginEmail'};ui.err='Los datos de la cuenta cambiaron. Vuelve a intentarlo.';renderSheet();return}
   writeAuthSession(a.email);ui.err='';ui.emailAuth=null;ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};render();renderSheet();toast('Sesión iniciada correctamente.');
  },
- authLogout(){clearAuthSession();ui.emailAuth=null;ui.sheet={type:'authHome'};ui.role='cliente';ui.unlocked=false;render();renderSheet();},
+ async authLogout(){
+  clearAuthSession();ui.emailAuth=null;ui.role='cliente';ui.unlocked=false;
+  if(Backend.configured()){await Backend.logoutClient();try{localStorage.removeItem(KEY)}catch(e){}S=seed();SHIFT=0}
+  ui.sheet={type:'authHome'};render();renderSheet();
+ },
  profile(){ui.err='';ui.sheet={type:'profile'};renderSheet()},
  profileClose(){ui.sheet=null;renderSheet()},
  profileEdit(){ui.err='';ui.sheet={type:'profileEdit'};renderSheet()},
@@ -1688,32 +1679,29 @@ const A={
   if(!m){err('Revisa la cédula. Ejemplo: V-12345678.');return}
   if(pass.length<8){err('Elige una contraseña de al menos 8 caracteres.');return}
   if(pass!==pass2){err('Las dos contraseñas no coinciden.');return}
-  const files={front:$('#suFront')?.files?.[0],back:$('#suBack')?.files?.[0],selfie:$('#suSelfie')?.files?.[0]};
-  if(!files.front||!files.back||!files.selfie){err('Adjunta las 3 imágenes: cédula por delante, cédula por detrás y una selfie.');return}
-  if(Object.values(files).some(f=>!f.type.startsWith('image/'))){err('Los tres archivos deben ser imágenes.');return}
+  const files={front:$('#suFront')?.files?.[0],selfie:$('#suSelfie')?.files?.[0]},backFile=$('#suBack')?.files?.[0];
+  if(backFile)files.back=backFile;
+  if(!files.front||!files.selfie){err('Adjunta la foto de tu cédula y la foto de tu rostro (selfie).');return}
+  if(Object.values(files).some(f=>!f.type.startsWith('image/'))){err('Los archivos deben ser imágenes.');return}
   if(Object.values(files).some(f=>f.size>12*1024*1024)){err('Cada imagen debe pesar menos de 12 MB.');return}
   const ci=(m[1]||'V')+'-'+m[2];
   const btn=document.querySelector('[data-a=signupSave]');if(btn){btn.disabled=true;btn.textContent='Procesando documentos…'}
   try{
-    const docs={};for(const k of ['front','back','selfie'])docs[k]=await shrink(files[k]);
+    const docs={};for(const k of Object.keys(files))docs[k]=await shrink(files[k]);
     const bytes=Object.values(docs).reduce((a,v)=>a+v.length,0);
     if(bytes>2*1024*1024){err('Las fotos ocupan demasiado espacio. Selecciona imágenes más pequeñas.');if(btn){btn.disabled=false;btn.textContent='Crear cuenta'}return}
     const freshAccount=!S.user.registered&&!Backend.clientId;
     if(freshAccount){S.loans=[];S.log=[];S.notes=[];S.user.points=0;S.user.streak=0;S.user.petBonusCredit=0;S.user.petMoraDiscount=0;S.user.pipo={m:'',c:0};S.user.tutorialDone=false;}
     S.user.name=name;S.user.fullName=name;S.user.profile=Object.assign({phone:'',email:'',ci:''},S.user.profile,{ci});
-    S.user.identityDocs={front:docs.front,back:docs.back,selfie:docs.selfie,submittedAt:today()};
+    S.user.identityDocs={front:docs.front,back:docs.back||'',selfie:docs.selfie,submittedAt:today()};
     S.user.creditLineReview={status:'pending',limit:0,requestedAt:today(),reviewedAt:null,reason:''};
     S.user.registered=true;S.user.createdAt=S.user.createdAt||today();writeAuthSession(normalizeEmail((S.user.profile||{}).email)||'');
     notify('prestamista','Nueva cuenta creada: '+name+' · C.I. '+ci+'. La línea de crédito espera revisión de identidad.');
-    if(Backend.enabled!==false&&Backend.url&&!Backend.clientId){
-      // El servidor viene configurado de fábrica: si no está encendido todavía (Render tarda ~40 s en despertar),
-      // se reintenta la conexión y la cuenta se sube sola en cuanto responda.
-      if(!Backend.on)await Backend.connect();
+    if(Backend.configured()&&!Backend.clientId){
+      // Con Supabase la cuenta se crea en el servidor: cédula + contraseña, fotos privadas y expediente.
+      if(btn)btn.textContent='Creando tu cuenta…';
       const r=await Backend.signup(ci,pass);
-      if(!r.ok){
-        const msg=(r.error||'No se pudo crear la cuenta en el servidor.').replace('Conéctate primero al servidor.','El servidor está despertando (puede tardar un minuto). Espera y pulsa Crear cuenta otra vez.');
-        err(msg);if(btn){btn.disabled=false;btn.textContent='Crear cuenta'}return;
-      }
+      if(!r.ok){err(r.error||'No se pudo crear la cuenta.');if(btn){btn.disabled=false;btn.textContent='Crear cuenta'}return}
     }
     ui.err='';ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};
     save();render();renderSheet();toast('Cuenta creada. Tus documentos están listos para revisión.');
@@ -1723,22 +1711,23 @@ const A={
   const inputs={front:$('#docFront')?.files?.[0],back:$('#docBack')?.files?.[0],selfie:$('#docSelfie')?.files?.[0]},old=identityDocs(),next={...old};
   const err=m=>{ui.err=m;const e=$('#docErr');if(e)e.textContent=m};
   for(const [k,f] of Object.entries(inputs))if(f&&( !f.type.startsWith('image/')||f.size>12*1024*1024)){err('Cada documento debe ser una imagen menor de 12 MB.');return}
-  if(!old.front&&!inputs.front||!old.back&&!inputs.back||!old.selfie&&!inputs.selfie){err('Debes completar las tres imágenes.');return}
+  if(!old.front&&!inputs.front||!old.selfie&&!inputs.selfie){err('Debes adjuntar la foto de tu cédula y la de tu rostro.');return}
   try{for(const k of ['front','back','selfie'])if(inputs[k])next[k]=await shrink(inputs[k]);}
   catch(e){err('No se pudieron procesar las imágenes.');return}
-  if(['front','back','selfie'].some(k=>!next[k])){err('Falta una de las tres imágenes.');return}
-  if(['front','back','selfie'].reduce((a,k)=>a+String(next[k]).length,0)>2*1024*1024){err('Las fotos ocupan demasiado espacio. Selecciona imágenes más pequeñas.');return}
-  S.user.identityDocs={front:next.front,back:next.back,selfie:next.selfie,submittedAt:today()};
+  if(['front','selfie'].some(k=>!next[k])){err('Falta la foto de la cédula o la del rostro.');return}
+  if(['front','back','selfie'].reduce((a,k)=>a+String(next[k]||'').length,0)>2*1024*1024){err('Las fotos ocupan demasiado espacio. Selecciona imágenes más pequeñas.');return}
+  if(Backend.on){try{for(const k of ['front','back','selfie'])if(inputs[k])next[k]=await Backend.upload(next[k])}catch(e){err('No se pudieron subir las fotos. Revisa tu conexión e inténtalo de nuevo.');return}}
+  S.user.identityDocs={front:next.front,back:next.back||'',selfie:next.selfie,submittedAt:today()};
   S.user.creditLineReview={status:'pending',limit:0,requestedAt:today(),reviewedAt:null,reason:''};
   notify('prestamista','El cliente '+(S.user.fullName||S.user.name)+' envió o actualizó sus documentos. Revisa su línea de crédito.');
   save();ui.sheet={type:'profile'};render();renderSheet();toast('Documentos enviados para revisión');
  },
- profileDocs(){if(identityDocsReady()){toast('Ya enviaste los tres documentos. Si necesitas actualizarlos, contacta al prestamista.');return}ui.err='';ui.sheet={type:'profileDocs'};renderSheet()},
+ profileDocs(){if(identityDocsReady()){toast('Ya enviaste tus documentos. Si necesitas actualizarlos, contacta al prestamista.');return}ui.err='';ui.sheet={type:'profileDocs'};renderSheet()},
  viewIdentityDoc(v){ui.sheet={type:'identityDoc',doc:v};renderSheet()},
  creditApprove(){
   if(!isLender()){toast('Solo el prestamista puede aprobar una línea.');return}
   if(Backend.on&&!Backend.activeClientId){toast('Abre primero el expediente del cliente.');return}
-  if(!identityDocsReady()){toast('No se puede aprobar sin las tres imágenes de identidad.');return}
+  if(!identityDocsReady()){toast('No se puede aprobar sin la foto de la cédula y la del rostro.');return}
   const input=$('#creditLineAmount'), amount=Number(input&&input.value), max=level().limit;
   if(!Number.isFinite(amount)||amount<10||amount>max||Math.round(amount/5)!==amount/5){toast('El límite debe ser entre $10 y '+money(max)+', en pasos de $5.');return}
   S.user.creditLineReview={...creditReview(),status:'approved',limit:amount,reviewedAt:today(),reason:''};
@@ -1861,20 +1850,16 @@ const A={
   g.forEach(i=>{i.status='pending';i.bundle=false;i.proofData='';i.proof='';i.ref='';i.submittedOn=null;delete i.paymentAmount;i.rejectNote='No se pudo verificar la referencia. Revisa el dato y envía de nuevo.'});
   notify('cliente','No se pudo validar tu pago de todas las cuotas. Revisa la referencia y vuelve a enviarlo.');
   go();toast('Pago devuelto al cliente')},
- chgPin(){if(Backend.on){toast('Las cuentas y contraseñas del personal se gestionan en /admin.html (Usuarios y roles).');return}ui.err='';ui.sheet={type:'pin',mode:'set'};renderSheet()},
+ chgPin(){if(Backend.configured()){toast('Las cuentas y contraseñas del personal se gestionan en /admin.html (Usuarios y roles).');return}ui.err='';ui.sheet={type:'pin',mode:'set'};renderSheet()},
  async pinok(){
   const p=($('#pin').value||'').trim(), fail=m=>{ui.err=m;$('#pinerr').textContent=m};
   if(!/^\d{4}$/.test(p)){fail('El PIN son 4 dígitos.');return}
-  if(Backend.on&&ui.sheet.mode!=='set'){
-    let r;try{r=await Backend.req('/api/auth',{method:'POST',noauth:true,body:{role:'staff',pin:p}})}catch(e){fail('No se pudo contactar al servidor.');return}
-    if(r.status!==200||!r.data||!r.data.token){fail(r.status===429?'Demasiados intentos. Espera unos minutos.':'El PIN ya no sirve con servidor: entra en /admin.html con tu usuario y contraseña.');return}
-    Backend.staffToken=r.data.token;
-  }else if(ui.sheet.mode==='set'){
+  if(Backend.configured()){fail('El panel del prestamista está en /admin.html: entra allí con tu correo y contraseña.');return}
+  else if(ui.sheet.mode==='set'){
     if(p!==(($('#pin2')&&$('#pin2').value)||'').trim()){fail('Los PIN no coinciden.');return}
     setPin(await hashPin(p));
   }else if(getPin()!==await hashPin(p)){fail('PIN incorrecto.');return}
   ui.unlocked=true;ui.role='prestamista';ui.sheet=null;ui.err='';window.scrollTo(0,0);
-  if(Backend.on){const cl=await Backend.fetchClients();if(cl.length){await Backend.selectClient(cl[0].id,{render:false});ui.pTab='pend';}}
   render();renderSheet()},
  viewProof(v,e){ui.sheet={type:'proof',loan:+e.dataset.l,n:+e.dataset.n};renderSheet()},
  scrim(v,e,ev){if(ev.target===e)A.close()},
@@ -1960,16 +1945,6 @@ const A={
   raf(()=>raf(()=>{r.classList.remove('theme-anim');spin()}));
  },
  server(){ui.err='';ui.sheet={type:'server'};renderSheet()},
- async srvSave(){
-  const u=($('#srvUrl').value||'').trim(), c=($('#srvCode').value||'').trim();
-  if(u&&!/^https?:\/\/[^\s]+$/i.test(u)){toast('La dirección debe empezar con http:// o https://');return}
-  Backend.stop();Backend.url=u;Backend.code=c;Backend.enabled=true;Backend.ver=0;Backend.persist();
-  toast('Conectando…');
-  const ok=await Backend.connect();
-  renderSheet();
-  toast(ok?'Servidor conectado':Backend.status==='auth'?'Código de acceso incorrecto':Backend.status==='offline'?'No se pudo llegar al servidor':'Esa dirección no responde como servidor de Quincena');
- },
- srvOff(){Backend.stop();Backend.enabled=true;Backend.url=Backend.DEFAULT_URL;Backend.code=Backend.DEFAULT_CODE;Backend.persist();Backend.connect().then(ok=>{renderSheet();toast(ok?'Conectado al servidor':'Reintentando la conexión…')})},
  range(v){ui.range=v;ui.allPays=false;render()},
  allPays(){ui.allPays=!ui.allPays;render()},
  exportCsv(v){
@@ -2076,16 +2051,9 @@ document.addEventListener('change',e=>{
 ui.enter=true;
 render();
 renderSheet();
-Backend.connect().then(()=>hydratePrivateImages(document));
+Backend.connect().then(afterConnect);
 /* La app se instala en el móvil y funciona sin conexión: los datos se sincronizan al volver la red. */
 try{if(typeof navigator!=='undefined'&&'serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{})})}}catch(e){}
-/* Con servidor, cada persona entra con su cuenta: si no hay sesión guardada se muestra la pantalla de entrada. */
-if(Backend.url&&!Backend.clientId&&!Backend.loadPass().pass){ui.sheet={type:'authHome'};renderSheet()}
-/* Acceso directo para clientes: ?c=<código> en el enlace guarda el código y quita el parámetro de la barra. */
-try{
-  const q=new URLSearchParams(location.search),c=q.get('c');
-  if(c){Backend.code=c;Backend.enabled=true;Backend.persist();q.delete('c');history.replaceState(null,'',location.pathname+(q.toString()?'?'+q.toString():''))}
-}catch(e){}
 </script>
 
 
