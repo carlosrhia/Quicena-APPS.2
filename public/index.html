@@ -646,7 +646,8 @@ const Backend={
   base(){const u=String(this.url||'').trim().replace(/\/+$/,'');return u||location.origin},
   tok(){return this.staffToken||this.tokens.cliente},
   async req(path,o={}){
-    const c=new AbortController(),to=setTimeout(()=>c.abort(),9000);
+    // Render gratis duerme el servicio: el primer intento puede tardar hasta un minuto en despertarlo.
+    const c=new AbortController(),to=setTimeout(()=>c.abort(),o.timeout||25000);
     try{
       const hd={};
       if(o.body!=null)hd['Content-Type']='application/json';
@@ -739,8 +740,14 @@ const Backend={
     if(this.enabled===false||typeof fetch!=='function')return false;
     if(!this.url&&!/^https?:$/.test(location.protocol))return false;
     try{
-      const h=await this.req('/api/health',{noauth:true});
-      if(h.status!==200||!h.data||!h.data.quincena){this.on=false;this.status='local';return false}
+      // Tres intentos: el servidor dormido tarda en responder la primera vez.
+      let h=null;
+      for(let i=0;i<3;i++){
+        h=await this.req('/api/health',{noauth:true,timeout:25000});
+        if(h.status===200&&h.data&&h.data.quincena)break;
+        await new Promise(r=>setTimeout(r,1500*(i+1)));
+      }
+      if(!h||h.status!==200||!h.data||!h.data.quincena){this.on=false;this.status='offline';this.scheduleRetry();return false}
       if(!(await this.loginClient())){this.on=false;this.status='auth';return false}
       this.on=true;this.status='online';
       if(this.clientId){await this.pull(true)}
@@ -750,8 +757,11 @@ const Backend={
       }
       this.startPoll();
       return true;
-    }catch(e){this.on=false;this.status='offline';return false}
+    }catch(e){this.on=false;this.status='offline';this.scheduleRetry();return false}
   },
+  /* Reintento automático: si el servidor está despertando, se vuelve a intentar solo. */
+  retryTimer:null,
+  scheduleRetry(){clearTimeout(this.retryTimer);this.retryTimer=setTimeout(()=>{this.connect().then(ok=>{if(ok&&typeof hydratePrivateImages==='function')hydratePrivateImages(document);if(ok&&ui.sheet&&ui.sheet.type==='authHome')renderSheet()})},8000)},
   startPoll(){
     clearInterval(this.poll);
     this.poll=setInterval(()=>{
@@ -1701,7 +1711,7 @@ const A={
       if(!Backend.on)await Backend.connect();
       const r=await Backend.signup(ci,pass);
       if(!r.ok){
-        const msg=(r.error||'No se pudo crear la cuenta en el servidor.').replace('Conéctate primero al servidor.','El servidor está despertando. Espera unos segundos y pulsa Crear cuenta otra vez.');
+        const msg=(r.error||'No se pudo crear la cuenta en el servidor.').replace('Conéctate primero al servidor.','El servidor está despertando (puede tardar un minuto). Espera y pulsa Crear cuenta otra vez.');
         err(msg);if(btn){btn.disabled=false;btn.textContent='Crear cuenta'}return;
       }
     }
