@@ -597,7 +597,7 @@ const setPin=h=>{memPin=h;try{localStorage.setItem(PIN_KEY,h)}catch(e){}};
 async function hashPin(p){try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('quincena:'+p));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){return 'x'+p}}
 /* Soporte: WhatsApp 0422-0018255 (el número no se muestra en la app). */
 const SUPPORT_WA='https://wa.me/584220018255?text='+encodeURIComponent('Hola, necesito ayuda con mi cuenta de Quincena.');
-const APP_VERSION='3.4';
+const APP_VERSION='3.5';
 /* Foto de la cédula: en Android 13+ Chrome abre el selector de fotos (sin cámara) si el campo acepta solo imágenes.
    Con un tipo adicional, Android muestra su menú clásico con «Cámara» y «Archivos». En iPhone basta con image/*. */
 const ID_ACCEPT=(typeof navigator!=='undefined'&&/Android/i.test(navigator.userAgent||''))?'image/*,android/force-camera-workaround':'image/*';
@@ -713,7 +713,7 @@ const Backend={
     return data.signedUrl;
   },
   /* Crear cuenta: usuario de Supabase (cédula + contraseña), fotos al almacenamiento privado y expediente. */
-  async signup(ci,pass){
+  async signup(ci,pass,realEmail){
     if(!this.sb)return {ok:false,error:'La app aún no está conectada a Supabase. Avísale al prestamista.'};
     const email=this.emailFor(ci), name=String(S.user.fullName||S.user.name||'').trim();
     try{
@@ -731,27 +731,83 @@ const Backend={
         if(!r.data||!r.data.session)return {ok:false,error:'La cuenta quedó esperando confirmación por correo. El administrador debe desactivar «Confirm email» en Supabase (Authentication → Sign In / Providers → Email) y luego podrás crearla.'};
         uid=r.data.user.id;
       }
+      this.pendingSignup={uid,ci,name};
+      const b=await this.bindDevice();
+      if(b.ok)return await this.finishSignup();
+      const em=await this.sendEmailCode(realEmail);
+      return {ok:false,need:'code',masked:this.mask(em)};
+    }catch(e){return {ok:false,error:this.errMsg(e,'No se pudo crear la cuenta.')}}
+  },
+  /* Segunda fase del registro (con el correo ya verificado): fotos privadas y expediente. */
+  async finishSignup(){
+    const p=this.pendingSignup;if(!p)return {ok:false,error:'Vuelve a pulsar «Crear cuenta».'};
+    try{
       const docs=Object.assign({},S.user.identityDocs||{});
-      for(const k of ['front','back','selfie'])if(docs[k]&&/^data:image\//.test(docs[k]))docs[k]=await this.putImage(uid,docs[k],k);
+      for(const k of ['front','back','selfie'])if(docs[k]&&/^data:image\//.test(docs[k]))docs[k]=await this.putImage(p.uid,docs[k],k);
       S.user.identityDocs=docs;
-      const ins=await this.sb.from('clients').insert({id:uid,name,ci,state:S}).select('version,state').single();
+      if(this.otpEmail){S.user.profile=Object.assign({phone:'',email:'',ci:''},S.user.profile,{email:this.otpEmail})}
+      const ins=await this.sb.from('clients').insert({id:p.uid,name:p.name,ci:p.ci,state:S}).select('version,state').single();
       if(ins.error)throw ins.error;
       await this.loadSettings();
-      this.clientId=uid;this.savePass(ci);this.on=true;this.status='online';
+      this.clientId=p.uid;this.savePass(p.ci);this.on=true;this.status='online';this.pendingSignup=null;
       this.ver=ins.data.version;S=ins.data.state;SHIFT=S.shift||0;this.cache();this.startPoll();
       return {ok:true};
     }catch(e){return {ok:false,error:this.errMsg(e,'No se pudo crear la cuenta.')}}
+  },
+  /* Dispositivo de confianza: un identificador secreto que solo guarda este teléfono. */
+  deviceToken(){
+    let t='';try{t=localStorage.getItem('quincena.device')||''}catch(e){}
+    if(t.length<32){const a=new Uint8Array(32);try{crypto.getRandomValues(a)}catch(e){for(let i=0;i<32;i++)a[i]=Math.floor(Math.random()*256)}t=Array.from(a,x=>x.toString(16).padStart(2,'0')).join('');try{localStorage.setItem('quincena.device',t)}catch(e){}}
+    return t;
+  },
+  async bindDevice(){
+    const {data,error}=await this.sb.rpc('client_device_bind',{p_token:this.deviceToken()});
+    if(error){if(/client_device_bind|PGRST202|Could not find the function/i.test(error.message||''))return {ok:true};throw error}
+    return data||{ok:true};
+  },
+  mask(m){const a=String(m||'').split('@');return (a[0]||'').slice(0,2)+'•••@'+(a[1]||'')},
+  otpClient(){if(!this._otp)this._otp=supabase.createClient(this.url,this.cfg.anonKey,{auth:{persistSession:false,autoRefreshToken:false,detectSessionInUrl:false,storageKey:'quincena.otp'}});return this._otp},
+  /* Envía el código: si el cliente ya tiene correo registrado, el servidor usa SIEMPRE ese correo. */
+  async sendEmailCode(email){
+    const {data:em,error}=await this.sb.rpc('client_email_start',{p_email:email||null,p_token:this.deviceToken()});
+    if(error)throw error;
+    this.otpEmail=em;
+    const r=await this.otpClient().auth.signInWithOtp({email:em,options:{shouldCreateUser:true,data:{purpose:'verificacion-cliente'}}});
+    if(r.error)throw new Error(/rate|seconds|too many/i.test(r.error.message)?'Espera un momento antes de pedir otro código.':r.error.message);
+    return em;
+  },
+  async confirmEmailCode(code){
+    const v=await this.otpClient().auth.verifyOtp({email:this.otpEmail,token:code,type:'email'});
+    if(v.error)throw new Error(/expired|invalid/i.test(v.error.message)?'El código no es válido o ya caducó. Pide uno nuevo.':v.error.message);
+    const c=await this.otpClient().rpc('client_email_confirm');
+    try{await this.otpClient().auth.signOut({scope:'local'})}catch(e){}
+    if(c.error)throw c.error;
+    return true;
   },
   async login(ci,pass){
     if(!this.sb)return {ok:false,error:'La app aún no está conectada a Supabase. Avísale al prestamista.'};
     try{
       const r=await this.sb.auth.signInWithPassword({email:this.emailFor(ci),password:pass});
       if(r.error)return {ok:false,error:this.errMsg(r.error,'No se pudo iniciar sesión.')};
-      const row=await this.sb.from('clients').select('id,version,state').eq('id',r.data.user.id).maybeSingle();
+      this.pendingLogin={ci};
+      const b=await this.bindDevice();
+      if(!b.ok){
+        if(b.hasEmail){const em=await this.sendEmailCode(null);return {ok:false,need:'code',masked:this.mask(em)}}
+        return {ok:false,need:'email'};
+      }
+      return await this.finishLogin();
+    }catch(e){return {ok:false,error:this.errMsg(e,'No se pudo iniciar sesión.')}}
+  },
+  async finishLogin(){
+    const ci=(this.pendingLogin||{}).ci||this.loadPass().ci||'';
+    try{
+      const {data:ses}=await this.sb.auth.getSession();const uid=ses&&ses.session&&ses.session.user.id;
+      if(!uid)return {ok:false,error:'Tu sesión caducó. Vuelve a entrar.'};
+      const row=await this.sb.from('clients').select('id,version,state').eq('id',uid).maybeSingle();
       if(row.error)return {ok:false,error:this.errMsg(row.error,'No se pudo abrir tu expediente.')};
       if(!row.data){await this.sb.auth.signOut();return {ok:false,error:'Tu registro quedó incompleto. Pulsa «Crear cuenta» y repítelo con la misma cédula y contraseña.'}}
       await this.loadSettings();
-      this.clientId=row.data.id;this.savePass(ci);this.on=true;this.status='online';
+      this.clientId=row.data.id;if(ci)this.savePass(ci);this.on=true;this.status='online';this.pendingLogin=null;
       this.ver=row.data.version;S=row.data.state;SHIFT=S.shift||0;this.cache();this.startPoll();
       return {ok:true};
     }catch(e){return {ok:false,error:this.errMsg(e,'No se pudo iniciar sesión.')}}
@@ -771,6 +827,8 @@ const Backend={
       const {data}=await this.sb.auth.getSession();
       const sess=data&&data.session;
       if(!sess){this.on=false;this.status='auth';return false}
+      const b=await this.bindDevice();
+      if(!b.ok){this.on=false;this.status='verify';this.verifyInfo=b;return false}
       const row=await this.sb.from('clients').select('id,version,state').eq('id',sess.user.id).maybeSingle();
       if(row.error)throw row.error;
       if(!row.data){this.on=false;this.status='auth';return false}
@@ -848,11 +906,15 @@ if(Backend.configured()){
 }
 /* Tras conectar: cierra la pantalla de entrada si la sesión era válida y la muestra si caducó. */
 function afterConnect(){
+  if(Backend.status==='verify'){const b=Backend.verifyInfo||{};ui.err='';ui.sheet={type:'device',purpose:'connect',step:b.hasEmail?'send':'email',masked:b.masked||''};render();renderSheet();return}
   try{Push.seen(S.notes.filter(n=>n.read).map(n=>n.id));Push.reminders()}catch(e){}
   if(Backend.on&&ui.sheet&&ui.sheet.type==='authHome'){ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};render();renderSheet()}
   else if(Backend.configured()&&!Backend.on&&Backend.status==='auth'&&!(ui.sheet&&['authHome','signup','tutorial'].includes(ui.sheet.type))){ui.sheet={type:'authHome'};renderSheet()}
   hydratePrivateImages(document);
 }
+
+/* Botón «Reenviar código»: espera 60 s entre envíos. */
+const Device={t:null,cooldown(){clearInterval(this.t);let n=60;const tick=()=>{const b=document.getElementById('dvResend');if(!b){clearInterval(this.t);return}if(n<=0){b.disabled=false;b.textContent='Reenviar código';clearInterval(this.t);return}b.disabled=true;b.textContent='Reenviar código ('+n+')';n--};tick();this.t=setInterval(tick,1000)}};
 
 /* ============ notificaciones en el teléfono ============ */
 /* Muestra en el teléfono los avisos nuevos del prestamista y el recordatorio del día anterior al vencimiento.
@@ -1450,12 +1512,23 @@ function sheetHTML(){
     const pending=ui.emailAuth||{}, mode=pending.purpose==='signup'?'creación de la cuenta':'inicio de sesión';
     body='<h2>Confirma tu correo</h2><p class="muted" style="margin:0">Introduce el código de 6 dígitos para '+mode+'. Correo: <span class="auth-email">'+esc(pending.email||'')+'</span></p><div class="auth-note"><b>Código de demostración</b><br>Este código no se ha enviado por correo porque el archivo local no tiene un servicio de email configurado.</div><div class="auth-code" aria-label="Código de demostración">'+esc(pending.code||'------')+'</div><div class="field"><label class="label" for="authOtp">Código de confirmación</label><input type="text" id="authOtp" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required placeholder="000000"></div><div class="small muted">El código vence en 10 minutos y permite hasta 5 intentos.</div><div class="err" id="authErr" role="alert">'+esc(ui.err||'')+'</div><button class="btn" data-a="authVerifyCode">Verificar código</button><button class="btn ghost" data-a="authResendCode">Generar otro código</button><button class="btn ghost" data-a="authBack">Cancelar</button>';
   }
+  if(s.type==='device'){
+    const title=s.purpose==='signup'?'Confirma tu correo':'Verifica este teléfono';
+    const intro=s.purpose==='signup'?'Para terminar de crear tu cuenta, escribe el código que enviamos a tu correo.':'Es la primera vez que entras desde este teléfono. Por tu seguridad, confirma con el código que enviamos a tu correo.';
+    if(s.step==='email')body='<div class="logo-hero" role="img" aria-label="Quincena"></div><h2 style="text-align:center">Protege tu cuenta</h2><p class="muted" style="margin:0;text-align:center">Registra tu correo. Cuando entres desde un teléfono nuevo te enviaremos un código para confirmar que eres tú.</p>'+
+      '<div class="field"><label class="label" for="dvEmail">Correo electrónico</label><input type="email" id="dvEmail" autocomplete="email" inputmode="email" placeholder="tucorreo@gmail.com"></div><div class="err" id="dvErr" role="alert">'+esc(ui.err||'')+'</div><button class="btn" data-a="deviceSend">Enviarme el código</button><button class="btn ghost" data-a="deviceCancel">Cancelar</button>';
+    else if(s.step==='send')body='<div class="logo-hero" role="img" aria-label="Quincena"></div><h2 style="text-align:center">'+title+'</h2><p class="muted" style="margin:0;text-align:center">'+intro+'</p><div class="info">Enviaremos el código a <b>'+esc(s.masked||'tu correo')+'</b>.</div><div class="err" id="dvErr" role="alert">'+esc(ui.err||'')+'</div><button class="btn" data-a="deviceSend">Enviarme el código</button><button class="btn ghost" data-a="deviceCancel">Cerrar sesión</button>';
+    else body='<div class="logo-hero" role="img" aria-label="Quincena"></div><h2 style="text-align:center">'+title+'</h2><p class="muted" style="margin:0;text-align:center">'+intro+'</p><div class="info">Código enviado a <b>'+esc(s.masked||'tu correo')+'</b>. Revisa también la carpeta de spam.</div>'+
+      '<div class="field"><label class="label" for="dvCode">Código del correo</label><input type="text" id="dvCode" inputmode="numeric" autocomplete="one-time-code" maxlength="10" placeholder="123456" style="text-align:center;letter-spacing:.3em;font-size:22px!important"></div><div class="err" id="dvErr" role="alert">'+esc(ui.err||'')+'</div>'+
+      '<button class="btn" data-a="deviceVerify">Verificar</button><button class="btn ghost" data-a="deviceResend" id="dvResend">Reenviar código</button><button class="btn ghost" data-a="deviceCancel">'+(s.purpose==='signup'?'Cancelar':'Cerrar sesión')+'</button>';
+  }
   if(s.type==='signup'){
     const nm=String(S.user.name||'').trim(), pre=nm.includes(' ')?nm:'';
     body='<button class="profile-edit-back" data-a="authBack">'+svg('back')+' Volver</button><div class="logo-hero" role="img" aria-label="Quincena"></div><h2 style="text-align:center">Completa tu cuenta</h2><p class="muted" style="margin:0;text-align:center">Completa tus datos tal como aparecen en tu documento y elige la contraseña de tu cuenta.</p><div class="auth-note">Con tu cédula y esta contraseña podrás entrar desde cualquier teléfono o navegador.</div>'+
       '<div class="field"><label class="label" for="suName">Nombre completo</label><input type="text" id="suName" autocomplete="name" placeholder="Ej. Carlos Andrés Pérez" value="'+esc(pre)+'"></div>'+
       '<div class="field"><label class="label" for="suCI">Cédula de identidad</label><input type="text" id="suCI" inputmode="text" autocomplete="off" placeholder="V-12345678" value="'+esc((S.user.profile||{}).ci||'')+'"></div>'+ 
       '<div class="info"><b>Verificación para la línea de crédito</b><br>Debes adjuntar una foto clara de la parte delantera de tu cédula y una foto de tu rostro (selfie). El prestamista revisará estos documentos para decidir si aprueba tu línea.</div>'+
+      '<div class="field"><label class="label" for="suEmail">Correo electrónico</label><input type="email" id="suEmail" autocomplete="email" inputmode="email" placeholder="tucorreo@gmail.com" value="'+esc(ui.suEmail||'')+'"><div class="small muted">Te enviaremos un código para confirmar que es tuyo. Lo usaremos para proteger tu cuenta si entras desde otro teléfono.</div></div>'+
       '<div class="field"><label class="label" for="suPass">Contraseña de tu cuenta</label><input type="password" id="suPass" minlength="8" autocomplete="new-password" placeholder="Letras y números, mínimo 8"><div class="pw-meter" aria-hidden="true"><i id="pwBar"></i></div><div class="small muted" id="pwHint">Usa al menos 8 caracteres con letras y números.</div></div>'+ 
       '<div class="field"><label class="label" for="suPass2">Repite la contraseña</label><input type="password" id="suPass2" minlength="8" autocomplete="new-password" placeholder="Otra vez"></div>'+ 
       '<div class="field"><label class="label" for="suFront">Foto de tu cédula (parte delantera)</label><input type="file" id="suFront" accept="'+ID_ACCEPT+'" required><div class="small muted">Al tocar, tu teléfono te deja tomar la foto o elegir una imagen guardada.</div></div>'+ 
@@ -1598,7 +1671,7 @@ function sheetHTML(){
       (groups.length?groups.map(g=>'<div class="nt-group">'+esc(g.g)+'</div>'+g.items.map(n=>{const isNew=unread.has(n.id);return '<div class="nt-item '+tone(n.text)+(isNew?' unread':'')+'"><span class="nt-ic">'+(ICN[logKind(n.text)]||'🔔')+'</span><div class="nt-tx">'+esc(n.text)+'<div class="nt-tm">'+fmtD(n.date)+'</div></div>'+(isNew?'<span class="nt-dot" aria-label="Nueva"></span>':'')+'</div>'}).join('')).join(''):'<div class="empty">Todavía no tienes avisos.</div>')+
       '<button class="btn dark" data-a="close">Cerrar</button>';
   }
-  const isProfile=s.type==='profile', isAuthScreen=['authHome','signupEmail','loginEmail','otpVerify','signup'].includes(s.type);
+  const isProfile=s.type==='profile', isAuthScreen=['authHome','signupEmail','loginEmail','otpVerify','signup','device'].includes(s.type);
   return '<div class="scrim '+(isProfile?'profile-scrim':'')+(isAuthScreen?' auth-scrim':'')+'" data-a="scrim"><div class="sheet '+(isProfile?'profile-sheet':'')+'" role="dialog" aria-modal="true">'+(isProfile||isAuthScreen?'':'<div class="grab"></div>')+body+'</div></div>';
 }
 let sheetWasOpen=false;
@@ -1607,7 +1680,7 @@ const renderSheet=()=>{
   if(h&&sheetWasOpen)h=h.replace('class="scrim ','class="scrim still ');
   $('#layer').innerHTML=h;sheetWasOpen=!!ui.sheet;hydratePrivateImages($('#layer'));
   document.body.classList[ui.sheet?'add':'remove']('sheet-open');
-  const authScreen=!!ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup'].includes(ui.sheet.type);
+  const authScreen=!!ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup','device'].includes(ui.sheet.type);
   document.documentElement.dataset.lvl=authScreen?'1':ui.role==='cliente'?String(LEVELS.indexOf(level())+1):'0';
 };
 
@@ -1615,7 +1688,7 @@ const renderSheet=()=>{
 function render(){
   ensureLog();
   applyMora();
-  document.documentElement.dataset.lvl=ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup'].includes(ui.sheet.type)?'1':ui.role==='cliente'?String(LEVELS.indexOf(level())+1):'0';
+  document.documentElement.dataset.lvl=ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup','device'].includes(ui.sheet.type)?'1':ui.role==='cliente'?String(LEVELS.indexOf(level())+1):'0';
   const unread=S.notes.filter(n=>n.to==='cliente'&&!n.read).length+reminders().length;
   let h='<header class="top"><div class="brand"><i class="logo" role="img" aria-label="Logo de Quincena"></i>Quincena</div><div class="top-actions">'+themeBtn()+'<button class="iconbtn" data-a="profile" aria-label="Información personal" title="Información personal">'+svg('user')+'</button><button class="iconbtn" data-a="bell" aria-label="Notificaciones">'+svg('bell')+(unread?'<span class="badge">'+unread+'</span>':'')+'</button></div></header>';
   h+=({inicio:vInicio,prestamos:vPrestamos,calendario:vCalendario,nivel:vNivel})[ui.tab]();
@@ -1646,6 +1719,30 @@ const go=()=>{save();render();renderSheet()};
 
 /* ============ acciones ============ */
 const A={
+ async deviceSend(){
+  const s=ui.sheet,fail=m=>{ui.err=m;const e=$('#dvErr');if(e)e.textContent=m};
+  let email=null;if(s.step==='email'){email=String(($('#dvEmail')&&$('#dvEmail').value)||'').trim().toLowerCase();if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){fail('Escribe un correo electrónico válido.');return}}
+  const b=document.querySelector('[data-a=deviceSend]');if(b){b.disabled=true;b.textContent='Enviando…'}
+  try{const em=await Backend.sendEmailCode(email);ui.err='';ui.sheet={...s,step:'code',masked:Backend.mask(em)};renderSheet();Device.cooldown()}
+  catch(e){if(b){b.disabled=false;b.textContent='Enviarme el código'}fail(Backend.errMsg(e,'No se pudo enviar el código.'))}
+ },
+ async deviceResend(){const fail=m=>{ui.err=m;const e=$('#dvErr');if(e)e.textContent=m};try{await Backend.sendEmailCode(Backend.otpEmail);toast('Código reenviado.');Device.cooldown()}catch(e){fail(Backend.errMsg(e,'No se pudo reenviar.'))}},
+ async deviceVerify(){
+  const s=ui.sheet,fail=m=>{ui.err=m;const e=$('#dvErr');if(e)e.textContent=m};
+  const code=String(($('#dvCode')&&$('#dvCode').value)||'').replace(/\D/g,'');if(code.length<6){fail('Escribe el código completo.');return}
+  const b=document.querySelector('[data-a=deviceVerify]');if(b){b.disabled=true;b.textContent='Verificando…'}
+  try{
+    await Backend.confirmEmailCode(code);
+    let r={ok:true};
+    if(s.purpose==='signup')r=await Backend.finishSignup();
+    else if(s.purpose==='login')r=await Backend.finishLogin();
+    else {const ok=await Backend.connect();r={ok,error:ok?'':'No se pudo abrir tu expediente.'}}
+    if(!r.ok)throw new Error(r.error||'No se pudo completar.');
+    ui.err='';writeAuthSession('');ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};render();renderSheet();
+    toast(s.purpose==='signup'?'Cuenta creada. Tus documentos están listos para revisión.':'Teléfono verificado. Sesión iniciada.');
+  }catch(e){if(b){b.disabled=false;b.textContent='Verificar'}fail(Backend.errMsg(e,'No se pudo verificar.'))}
+ },
+ async deviceCancel(){await Backend.logoutClient();ui.err='';ui.sheet={type:'authHome'};render();renderSheet()},
  authCreate(){ui.err='';ui.emailDraft='';ui.emailAuth=null;ui.sheet={type:'signup'};renderSheet()},
  async clientLogin(){
   const ci=normalizeCI($('#clCI')&&$('#clCI').value),pass=($('#clPass')&&$('#clPass').value)||'',fail=m=>{ui.err=m;const e=$('#clErr');if(e)e.textContent=m};
@@ -1654,6 +1751,7 @@ const A={
   const btn=document.querySelector('[data-a=clientLogin]');if(btn){btn.disabled=true;btn.textContent='Entrando…'}
   const r=await Backend.login(ci,pass);
   if(btn){btn.disabled=false;btn.textContent='Entrar'}
+  if(r.need){ui.err='';ui.sheet={type:'device',purpose:'login',step:r.need==='code'?'code':'email',masked:r.masked||''};renderSheet();if(r.need==='code')Device.cooldown();return}
   if(!r.ok){fail(r.error||'No se pudo entrar.');return}
   ui.err='';ui.emailAuth=null;writeAuthSession(normalizeEmail((S.user.profile||{}).email)||'');
   ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};render();renderSheet();toast('Sesión iniciada.');
@@ -1768,6 +1866,8 @@ const A={
   if(!m){err('Revisa la cédula. Ejemplo: V-12345678.');return}
   if(pass.length<8||!/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(pass)||!/\d/.test(pass)){err('Elige una contraseña de al menos 8 caracteres, con letras y números.');return}
   if(pass!==pass2){err('Las dos contraseñas no coinciden.');return}
+  const realEmail=String(($('#suEmail')&&$('#suEmail').value)||'').trim().toLowerCase();ui.suEmail=realEmail;
+  if(Backend.configured()&&!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(realEmail)){err('Escribe un correo electrónico válido. Te enviaremos un código.');return}
   const files={front:pickedFile('front','#suFront'),selfie:$('#suSelfie')?.files?.[0]};
   if(!files.front||!files.selfie){err('Adjunta la foto de tu cédula y la foto de tu rostro (selfie).');return}
   if(Object.values(files).some(f=>!f.type.startsWith('image/'))){err('Los archivos deben ser imágenes.');return}
@@ -1788,7 +1888,8 @@ const A={
     if(Backend.configured()&&!Backend.clientId){
       // Con Supabase la cuenta se crea en el servidor: cédula + contraseña, fotos privadas y expediente.
       if(btn)btn.textContent='Creando tu cuenta…';
-      const r=await Backend.signup(ci,pass);
+      const r=await Backend.signup(ci,pass,realEmail);
+      if(r.need==='code'){ui.err='';ui.sheet={type:'device',purpose:'signup',step:'code',masked:r.masked};renderSheet();Device.cooldown();return}
       if(!r.ok){err(r.error||'No se pudo crear la cuenta.');if(btn){btn.disabled=false;btn.textContent='Crear cuenta'}return}
     }
     ui.err='';ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};
@@ -1926,7 +2027,7 @@ const A={
  async pushOn(){const r=await Push.ask();renderSheet();render();toast(r==='granted'?'Notificaciones activadas en este teléfono.':r==='denied'?'Las notificaciones están bloqueadas. Actívalas en los ajustes del navegador.':'No se activaron las notificaciones.')},
  pushHide(){ui.pushHidden=true;render()},
  pushTest(){Push.show('Quincena','Así verás tus avisos de pagos y préstamos.','test-'+Date.now())},
- close(){if(ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup','tutorial'].includes(ui.sheet.type))return;ui.sheet=null;renderSheet()},
+ close(){if(ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup','tutorial','device'].includes(ui.sheet.type))return;ui.sheet=null;renderSheet()},
  pmode(v){ui.sheet.mode=v;const r=$('#ref')?$('#ref').value:'';renderSheet();if($('#ref'))$('#ref').value=r},
  copy(v,e){const t=e.dataset.t;const bad=()=>toast('No se pudo copiar. Selecciona el texto a mano.');
   try{navigator.clipboard.writeText(t).then(()=>toast('Datos copiados'),bad)}catch(x){bad()}},

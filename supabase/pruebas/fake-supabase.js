@@ -40,7 +40,7 @@
     session() { if (!this.persist) return this.mem; try { return JSON.parse(localStorage.getItem(this.key) || 'null'); } catch (e) { return null; } }
     setSession(s) { if (!this.persist) { this.mem = s; return; } if (s) localStorage.setItem(this.key, JSON.stringify(s)); else localStorage.removeItem(this.key); }
     uid() { const s = this.session(); return s && s.user ? s.user.id : null; }
-    claims() { const s = this.session(); return s && s.user ? { sub: s.user.id, session_id: s.session_id, amr: s.amr } : {}; }
+    claims() { const s = this.session(); return s && s.user ? { sub: s.user.id, email: s.user.email, session_id: s.session_id, amr: s.amr } : {}; }
     from(t) { return new Query(this, t); }
     rpc(name, args) { return { then: (res, rej) => call('rpc', { claims: this.claims(), uid: this.uid(), name, args: args || {} }).then(res, rej) }; }
   }

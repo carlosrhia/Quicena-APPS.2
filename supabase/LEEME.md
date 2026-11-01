@@ -105,6 +105,50 @@ Las variables de entorno solo se aplican en despliegues nuevos.
 
 
 
+
+## Actualizar a la versión 4 (clientes: código por correo en teléfonos nuevos)
+
+### A. Correo propio con Gmail (SMTP) — imprescindible
+El correo gratuito de Supabase solo envía a los miembros del equipo del proyecto; para los clientes hace falta enviar desde tu Gmail.
+
+1. En tu cuenta de Google activa la **verificación en 2 pasos**: <https://myaccount.google.com/security>.
+2. Crea una **contraseña de aplicación** en <https://myaccount.google.com/apppasswords> (nombre: «Quincena») y copia las 16 letras.
+3. En Supabase: **Authentication → Emails → SMTP Settings** (*Configuración de SMTP*), activa **Enable custom SMTP** y rellena:
+
+| Campo | Valor |
+|---|---|
+| Sender email (remitente) | tu Gmail |
+| Sender name | `Quincena` |
+| Host | `smtp.gmail.com` |
+| Port | `465` |
+| Username | tu Gmail |
+| Password | las 16 letras (sin espacios) |
+
+4. **Save**. En **Authentication → Rate Limits** sube *Rate limit for sending emails* a unos **100 por hora**.
+
+### B. Plantillas en español con el código
+En **Authentication → Emails → Templates**, en **Magic Link** y también en **Confirm signup**, pon como asunto
+`Tu código de Quincena` y como contenido:
+
+```html
+<h2>Tu código de Quincena</h2>
+<p>Escribe este código en la app:</p>
+<p style="font-size:28px;font-weight:bold;letter-spacing:6px">{{ .Token }}</p>
+<p>Si no fuiste tú, ignora este correo.</p>
+```
+
+### C. Base de datos
+Ejecuta otra vez **todo** `supabase/schema.sql` (la primera línea con texto termina en **· v4**).
+
+### Cómo funciona
+- **Cliente nuevo:** al crear la cuenta pone su correo y escribe el código que le llega. Ese teléfono queda de confianza.
+- **Mismo teléfono:** entra con cédula y contraseña, sin código.
+- **Teléfono nuevo:** tras la contraseña se pide el código enviado **a su correo registrado** (un ladrón con la contraseña no puede cambiarlo).
+- **Clientes que ya existían:** la próxima vez que abran la app se les pide registrar su correo una sola vez.
+- **Panel:** en la ficha del cliente ves su correo verificado y puedes **Restablecer correo y teléfonos**. En **Ajustes** puedes desactivar esta protección.
+- **Emergencia** (si falla el correo): en SQL Editor
+  `update public.app_settings set data = jsonb_set(data, '{clientDevice2fa}', 'false') where id = 1;`
+
 ## Actualizar a la versión 3 (seguridad: código por correo, contraseñas fuertes y límites)
 
 1. **Une el pull request** en GitHub. Vercel publica el panel nuevo.

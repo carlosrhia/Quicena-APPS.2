@@ -19,6 +19,7 @@ grant usage on schema public, storage, auth to authenticated; grant execute on a
 `);
 await db.exec(fs.readFileSync(new URL('../schema.sql', import.meta.url), 'utf8'));
 await db.exec(fs.readFileSync(new URL('../schema.sql', import.meta.url), 'utf8')); // idempotente
+await db.exec(`update public.app_settings set data = data || '{"clientDevice2fa": false}'::jsonb where id = 1;`);
 await db.exec(`grant select, insert, update, delete on all tables in schema public to authenticated; grant usage on all sequences in schema public to authenticated; grant select, insert on storage.objects to authenticated; grant usage on all sequences in schema storage to authenticated; alter table storage.objects enable row level security;`);
 
 const ids = {};
@@ -28,9 +29,9 @@ for (const e of ['admin@x.com', 'cob@x.com', 'v12345678@clientes.quincena.app', 
 const ADMIN = ids['admin@x.com'], COB = ids['cob@x.com'], C1 = ids['v12345678@clientes.quincena.app'], C2 = ids['v7654321@clientes.quincena.app'];
 await db.exec(`insert into public.staff (user_id, email, name, role) select id, lower(email), 'Jefe', 'admin' from auth.users where lower(email)=lower('ADMIN@x.com') on conflict (user_id) do update set role='admin', active=true;`);
 
-var AMR = 'otp', SESSION = null;
+var AMR = 'otp', SESSION = null, EMAIL = null;
 async function as(uid, sql, params) {
-  const claims = JSON.stringify({ sub: uid, session_id: SESSION || ('sess-' + uid), amr: [{ method: AMR, timestamp: 1 }] });
+  const claims = JSON.stringify({ sub: uid, email: EMAIL || undefined, session_id: SESSION || ('sess-' + uid), amr: [{ method: AMR, timestamp: 1 }] });
   await db.exec(`reset role; select set_config('request.uid', '${uid || ''}', false); select set_config('request.jwt.claims', '${claims}', false); set role authenticated;`);
   try { return await db.query(sql, params); } finally { await db.exec('reset role'); }
 }
@@ -206,4 +207,34 @@ for (let k = 0; k < 18; k++) await as(C1, `insert into storage.objects (bucket_i
 await fails(C1, `insert into storage.objects (bucket_id,name) values ('documentos', $1)`, [C1 + '/x99.jpg'], /row-level/);
 await as(ADMIN, `insert into storage.objects (bucket_id,name) values ('documentos', $1)`, [C1 + '/admin-extra.jpg']);
 console.log('OK v3: una solicitud pendiente, contraseñas con letras y números, máx. 20 fotos al día');
+
+// ---------- v4: clientes, correo verificado y dispositivos de confianza ----------
+await db.exec(`update public.app_settings set data = data || '{"clientDevice2fa": true}'::jsonb where id = 1;`);
+const TOK = 'a'.repeat(40), TOK2 = 'b'.repeat(40);
+assert.equal((await as(C1, `select * from clients`)).rows.length, 0, 'sesión sin verificar: no ve su expediente');
+await fails(C1, `insert into storage.objects (bucket_id,name) values ('documentos', $1)`, [C1 + '/nv.jpg'], /row-level/);
+let b = (await as(C1, `select client_device_bind($1) r`, [TOK])).rows[0].r;
+assert.equal(b.ok, false); assert.equal(b.hasEmail, false);
+await fails(C1, `select client_email_start('no-es-correo', $1)`, [TOK], /correo electrónico válido/);
+assert.equal((await as(C1, `select client_email_start('Ana@Correo.com', $1) r`, [TOK])).rows[0].r, 'ana@correo.com');
+const R = (await db.query(`insert into auth.users(email) values ('ana@correo.com') returning id`)).rows[0].id;
+EMAIL = 'otro@correo.com'; await fails(R, `select client_email_confirm()`, [], /caducó/);
+EMAIL = 'ana@correo.com'; assert.equal((await as(R, `select client_email_confirm() r`)).rows[0].r.ok, true); EMAIL = null;
+assert.equal((await as(C1, `select * from clients`)).rows.length, 1, 'tras el código ve su expediente');
+SESSION = 'mismo-telefono-otro-dia';
+assert.equal((await as(C1, `select * from clients`)).rows.length, 0);
+assert.equal((await as(C1, `select client_device_bind($1) r`, [TOK])).rows[0].r.ok, true, 'el teléfono de confianza entra sin código');
+assert.equal((await as(C1, `select * from clients`)).rows.length, 1);
+SESSION = 'telefono-del-ladron';
+b = (await as(C1, `select client_device_bind($1) r`, [TOK2])).rows[0].r;
+assert.equal(b.ok, false); assert.equal(b.hasEmail, true); assert.match(b.masked, /^an•••@correo\.com$/);
+assert.equal((await as(C1, `select client_email_start('ladron@x.com', $1) r`, [TOK2])).rows[0].r, 'ana@correo.com', 'el código siempre va al correo registrado');
+assert.equal((await as(C1, `select * from clients`)).rows.length, 0, 'el ladrón no ve nada');
+SESSION = null;
+assert.equal((await as(ADMIN, `select staff_client_security($1) r`, [C1])).rows[0].r.email, 'ana@correo.com');
+await fails(C1, `select admin_reset_client_security($1)`, [C1], /Solo el administrador/);
+await as(ADMIN, `select admin_reset_client_security($1)`, [C1]);
+assert.equal((await as(ADMIN, `select staff_client_security($1) r`, [C1])).rows[0].r.email, null);
+assert.equal((await as(C1, `select * from clients`)).rows.length, 0, 'tras restablecer, debe verificar de nuevo');
+console.log('OK v4: correo verificado, teléfono de confianza, intruso bloqueado y restablecimiento desde el panel');
 console.log('OK: todas las comprobaciones del esquema pasaron');
