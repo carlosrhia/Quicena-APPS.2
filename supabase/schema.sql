@@ -1,5 +1,5 @@
 -- =====================================================================
--- Quincena · esquema de base de datos para Supabase (plan gratuito) · v3
+-- Quincena · esquema de base de datos para Supabase (plan gratuito) · v4
 -- ---------------------------------------------------------------------
 -- Cómo usarlo: Supabase → SQL Editor → New query → pega TODO este
 -- archivo → Run. Se puede ejecutar varias veces sin romper nada.
@@ -97,6 +97,33 @@ begin
 end;
 $$;
 
+-- ---------- clientes: correo verificado y dispositivos de confianza (v4) ----------
+-- Desde un teléfono nuevo el cliente debe confirmar un código enviado a su correo. Solo las sesiones
+-- verificadas (o abiertas desde un dispositivo de confianza) pueden leer o cambiar el expediente.
+create table if not exists public.client_security (
+  user_id         uuid primary key references auth.users (id) on delete cascade,
+  email           text,
+  pending_email   text,
+  pending_at      timestamptz,
+  pending_session text,
+  pending_device  text,
+  devices         jsonb not null default '[]'::jsonb,
+  sessions        text[] not null default '{}'
+);
+alter table public.client_security enable row level security;
+
+create or replace function public.client_verified() returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare cfg jsonb;
+begin
+  if auth.uid() is null then return false; end if;
+  select data into cfg from public.app_settings where id = 1;
+  if coalesce(cfg ->> 'clientDevice2fa', 'true') = 'false' then return true; end if;
+  return exists (select 1 from public.client_security c
+                 where c.user_id = auth.uid() and (auth.jwt() ->> 'session_id') = any (c.sessions));
+end;
+$$;
+
 -- ---------- funciones de apoyo para los permisos ----------
 create or replace function public.is_staff() returns boolean
 language sql stable security definer set search_path = public as $$
@@ -126,7 +153,7 @@ begin
   if folder is null or folder !~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' then
     return false;
   end if;
-  return folder = auth.uid()::text or public.can_see_client(folder::uuid);
+  return (folder = auth.uid()::text and public.client_verified()) or public.can_see_client(folder::uuid);
 end;
 $$;
 
@@ -457,14 +484,14 @@ create policy staff_select on public.staff for select to authenticated
 
 drop policy if exists clients_select on public.clients;
 create policy clients_select on public.clients for select to authenticated
-  using (id = auth.uid() or public.can_see_client(id));
+  using ((id = auth.uid() and public.client_verified()) or public.can_see_client(id));
 drop policy if exists clients_insert on public.clients;
 create policy clients_insert on public.clients for insert to authenticated
-  with check (id = auth.uid());
+  with check (id = auth.uid() and public.client_verified());
 drop policy if exists clients_update on public.clients;
 create policy clients_update on public.clients for update to authenticated
-  using (id = auth.uid() or public.can_see_client(id))
-  with check (id = auth.uid() or public.can_see_client(id));
+  using ((id = auth.uid() and public.client_verified()) or public.can_see_client(id))
+  with check ((id = auth.uid() and public.client_verified()) or public.can_see_client(id));
 drop policy if exists clients_delete on public.clients;
 create policy clients_delete on public.clients for delete to authenticated
   using (public.is_admin());
@@ -662,6 +689,112 @@ grant execute on function public.staff_2fa_begin() to authenticated;
 revoke all on function public.staff_2fa_complete() from public, anon;
 grant execute on function public.staff_2fa_complete() to authenticated;
 
+
+-- ---------- clientes: verificación por correo en teléfonos nuevos ----------
+create or replace function public.q_hash(t text) returns text
+language sql immutable set search_path = public, extensions as $$
+  select encode(extensions.digest(coalesce(t, ''), 'sha256'), 'hex');
+$$;
+
+-- Al entrar: si este teléfono ya es de confianza, la sesión queda verificada sin código.
+create or replace function public.client_device_bind(p_token text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare c public.client_security; sid text := auth.jwt() ->> 'session_id'; cfg jsonb;
+begin
+  if auth.uid() is null then raise exception 'Sesión no válida.'; end if;
+  select data into cfg from public.app_settings where id = 1;
+  if coalesce(cfg ->> 'clientDevice2fa', 'true') = 'false' then return jsonb_build_object('ok', true); end if;
+  insert into public.client_security (user_id) values (auth.uid()) on conflict (user_id) do nothing;
+  select * into c from public.client_security where user_id = auth.uid();
+  if sid is not null and sid = any (c.sessions) then return jsonb_build_object('ok', true); end if;
+  if length(coalesce(p_token, '')) >= 32 and exists (select 1 from jsonb_array_elements(c.devices) d where d ->> 'h' = public.q_hash(p_token)) then
+    update public.client_security set sessions = (array_append(array_remove(sessions, sid), sid))[greatest(1, cardinality(sessions) - 18):] where user_id = auth.uid();
+    return jsonb_build_object('ok', true);
+  end if;
+  return jsonb_build_object('ok', false, 'hasEmail', c.email is not null,
+    'masked', case when c.email is null then null else left(c.email, 2) || '•••@' || split_part(c.email, '@', 2) end);
+end;
+$$;
+
+-- Pide el código: con correo ya registrado se usa SIEMPRE ese (un ladrón no puede cambiarlo).
+create or replace function public.client_email_start(p_email text, p_token text) returns text
+language plpgsql security definer set search_path = public as $$
+declare c public.client_security; em text := lower(trim(coalesce(p_email, '')));
+begin
+  if auth.uid() is null then raise exception 'Sesión no válida.'; end if;
+  if exists (select 1 from public.staff where user_id = auth.uid()) then raise exception 'Las cuentas del personal entran por el panel.'; end if;
+  if length(coalesce(p_token, '')) < 32 then raise exception 'Dispositivo inválido.'; end if;
+  insert into public.client_security (user_id) values (auth.uid()) on conflict (user_id) do nothing;
+  select * into c from public.client_security where user_id = auth.uid();
+  if c.email is not null then em := c.email;
+  elsif em !~ '^[^@\s]+@[^@\s]+\.[^@\s]+$' or em like '%@clientes.quincena.app' then
+    raise exception 'Escribe un correo electrónico válido.';
+  end if;
+  update public.client_security set pending_email = em, pending_at = now(), pending_session = auth.jwt() ->> 'session_id',
+         pending_device = public.q_hash(p_token) where user_id = auth.uid();
+  return em;
+end;
+$$;
+
+-- Confirma el código: se llama con la sesión obtenida al validar el código en ESE correo.
+create or replace function public.client_email_confirm() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare em text := lower(coalesce(auth.jwt() ->> 'email', '')); c public.client_security; n int;
+begin
+  if em = '' or not public.jwt_has_method(array['otp', 'magiclink', 'email']) then raise exception 'Falta validar el código del correo.'; end if;
+  select * into c from public.client_security
+   where pending_email = em and pending_at > now() - interval '15 minutes'
+   order by pending_at desc limit 1;
+  if not found then raise exception 'El código caducó. Vuelve a pedir uno nuevo.'; end if;
+  update public.client_security
+     set email = em,
+         devices = (select coalesce(jsonb_agg(d), '[]'::jsonb) from (
+                      select d from jsonb_array_elements(devices) d where d ->> 'h' <> c.pending_device
+                      union all select jsonb_build_object('h', c.pending_device, 'at', now())) z
+                    limit 1) ,
+         sessions = (array_append(array_remove(sessions, c.pending_session), c.pending_session))[greatest(1, cardinality(sessions) - 18):],
+         pending_email = null, pending_at = null, pending_session = null, pending_device = null
+   where user_id = c.user_id;
+  -- conserva como máximo los 5 dispositivos más recientes
+  update public.client_security set devices = (select coalesce(jsonb_agg(x order by x ->> 'at'), '[]'::jsonb) from
+           (select x from jsonb_array_elements(devices) x order by x ->> 'at' desc limit 5) t)
+   where user_id = c.user_id;
+  insert into public.audit (actor, action, detail) values ('cliente', 'client.device.verified', em);
+  return jsonb_build_object('ok', true);
+end;
+$$;
+
+-- Panel: ver el correo verificado del cliente y restablecerlo si pierde el acceso.
+create or replace function public.staff_client_security(p_client uuid) returns jsonb
+language plpgsql stable security definer set search_path = public as $$
+declare c public.client_security;
+begin
+  if not public.can_see_client(p_client) then raise exception 'Acceso denegado.'; end if;
+  select * into c from public.client_security where user_id = p_client;
+  return jsonb_build_object('email', c.email, 'devices', coalesce(jsonb_array_length(c.devices), 0));
+end;
+$$;
+
+create or replace function public.admin_reset_client_security(p_client uuid) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if not public.is_admin() then raise exception 'Solo el administrador puede restablecer el correo del cliente.'; end if;
+  update public.client_security set email = null, devices = '[]'::jsonb, sessions = '{}', pending_email = null where user_id = p_client;
+  insert into public.audit (actor, action, detail) select public.actor_name(), 'client.security.reset', name || ' · C.I. ' || ci from public.clients where id = p_client;
+end;
+$$;
+
+revoke all on function public.client_device_bind(text) from public, anon;
+grant execute on function public.client_device_bind(text) to authenticated;
+revoke all on function public.client_email_start(text, text) from public, anon;
+grant execute on function public.client_email_start(text, text) to authenticated;
+revoke all on function public.client_email_confirm() from public, anon;
+grant execute on function public.client_email_confirm() to authenticated;
+revoke all on function public.staff_client_security(uuid) from public, anon;
+grant execute on function public.staff_client_security(uuid) to authenticated;
+revoke all on function public.admin_reset_client_security(uuid) from public, anon;
+grant execute on function public.admin_reset_client_security(uuid) to authenticated;
+
 -- ---------- almacenamiento privado de imágenes ----------
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('documentos', 'documentos', false, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
@@ -686,6 +819,8 @@ create policy quincena_docs_select on storage.objects for select to authenticate
 -- SI TE QUEDAS SIN ACCESO AL PANEL porque no llega el código del correo, desactiva
 -- temporalmente la verificación en dos pasos (y vuelve a activarla con 'true'):
 --   update public.app_settings set data = jsonb_set(data, '{staff2fa}', 'false') where id = 1;
+-- Y si los CLIENTES no reciben el código (por ejemplo, falla el SMTP):
+--   update public.app_settings set data = jsonb_set(data, '{clientDevice2fa}', 'false') where id = 1;
 -- ---------------------------------------------------------------------
 -- PRIMER ADMINISTRADOR (ejecútalo aparte, después de crear tu usuario en
 -- Authentication → Users → Add user, con "Auto Confirm User" marcado).

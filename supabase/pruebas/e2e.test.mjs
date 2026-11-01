@@ -54,8 +54,9 @@ async function handle(m) {
       return u ? { data: { user: { id: u.id }, session: sess(u) }, error: null } : { data: null, error: { message: 'Invalid login credentials' } };
     }
     if (m.kind === 'otpSend') {
-      const u = (await db.query('select id from auth.users where email=$1', [m.email.toLowerCase()])).rows[0];
+      let u = (await db.query('select id from auth.users where email=$1', [m.email.toLowerCase()])).rows[0];
       if (!u && !m.create) return { data: null, error: { message: 'Signups not allowed for otp' } };
+      if (!u) u = (await db.query('insert into auth.users(email) values ($1) returning id', [m.email.toLowerCase()])).rows[0];
       const code = String(100000 + Math.floor(Math.random() * 900000)); otpCodes.set(m.email.toLowerCase(), code);
       return { data: {}, error: null };
     }
@@ -138,9 +139,15 @@ await cp.waitForSelector('[data-a=clientLogin]');
 await cp.click('[data-a=authCreate]');
 await cp.fill('#suName', 'Ana María Pérez'); await cp.fill('#suCI', 'V-12345678');
 await cp.fill('#suPass', 'clave-segura-1'); await cp.fill('#suPass2', 'clave-segura-1');
+await cp.fill('#suEmail', 'ana@correo.com');
 await cp.setInputFiles('#suFront', png);
 await cp.setInputFiles('#suSelfie', png);
 await cp.click('[data-a=signupSave]');
+await cp.waitForSelector('#dvCode', { timeout: 15000 });
+assert.equal((await db.query('select count(*)::int n from public.clients')).rows[0].n, 0, 'sin confirmar el correo no se crea el expediente');
+await cp.fill('#dvCode', '000000'); await cp.click('[data-a=deviceVerify]');
+await cp.waitForFunction(() => /no es válido/.test(document.querySelector('#dvErr').textContent));
+await cp.fill('#dvCode', otpCodes.get('ana@correo.com')); await cp.click('[data-a=deviceVerify]');
 await cp.waitForFunction(() => document.querySelector('#toast') && /Cuenta creada/.test(document.querySelector('#toast').textContent), null, { timeout: 15000 });
 let row = (await db.query('select * from public.clients')).rows[0];
 assert.equal(row.name, 'Ana María Pérez'); assert.equal(row.ci, 'V-12345678');
@@ -322,6 +329,21 @@ assert.match(await cp.textContent('.sheet'), /Notificaciones activadas|Notificac
 await cp.evaluate(() => A.close());
 assert.equal(await cp.evaluate(() => getComputedStyle(document.documentElement).overscrollBehaviorY), 'none');
 console.log('✓ soporte por WhatsApp sin número visible, notificaciones activables y sin rebote al deslizar');
+
+// ---------- 8c. teléfono nuevo: hace falta el código del correo ----------
+const nctx = await newCtx({ width: 390, height: 844 });
+const np = await nctx.newPage(); watch(np, 'telefono-nuevo');
+await np.goto(BASE + '/');
+await np.waitForSelector('[data-a=clientLogin]');
+await np.fill('#clCI', 'V-12345678'); await np.fill('#clPass', 'clave-nueva-99');
+await np.click('[data-a=clientLogin]');
+await np.waitForSelector('#dvCode', { timeout: 15000 });
+assert.match(await np.textContent('.sheet'), /an•••@correo\.com/, 'muestra el correo enmascarado');
+await np.fill('#dvCode', otpCodes.get('ana@correo.com')); await np.click('[data-a=deviceVerify]');
+await toastIs(np, /Teléfono verificado/);
+await np.waitForFunction(() => S.user.registered && S.loans.length > 0, null, { timeout: 15000 });
+await nctx.close();
+console.log('✓ teléfono nuevo: tras la contraseña pide el código del correo; el mismo teléfono entra sin código');
 
 // ---------- 9. el cliente entra con la contraseña nueva ----------
 const cp2 = await cctx.newPage(); watch(cp2, 'cliente2');
