@@ -27,7 +27,7 @@
   --font-body:'Instrument Sans','Segoe UI',system-ui,sans-serif;
 }
 /* Ámbar, Jade, Zafiro, Rubí */
-:root[data-lvl="1"]{--h:38;--acc-l:#E8A317;--onacc-l:#2A1B00;--acc-d:#F2B33D;--onacc-d:#2A1B00}
+:root[data-lvl="1"]{--h:24;--acc-l:#FF6A00;--onacc-l:#FFFFFF;--acc-d:#FF7A1A;--onacc-d:#1F0B00}
 :root[data-lvl="2"]{--h:158;--acc-l:#2DBE82;--onacc-l:#04241A;--acc-d:#4AD8A0;--onacc-d:#04241A}
 :root[data-lvl="3"]{--h:218;--acc-l:#4C8DF6;--onacc-l:#06152E;--acc-d:#6AA6FF;--onacc-d:#06152E}
 :root[data-lvl="4"]{--h:348;--acc-l:#E5566F;--onacc-l:#2B0610;--acc-d:#FF7B93;--onacc-d:#2B0610}
@@ -408,7 +408,31 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
 @media(prefers-reduced-motion:reduce){.streak-flame,.pet-spark{animation:none!important}.nav-bubble{transition:none!important}.profile-icon,.profile-support-icon,.profile-head::before,.profile-avatar{transition:none!important}}
 
 /* ===== v14: correcciones móviles, modo oscuro manual, animaciones y rendimiento ===== */
-html{-webkit-text-size-adjust:100%}
+html{-webkit-text-size-adjust:100%;background-color:var(--bg);overscroll-behavior-y:none;min-height:100%}
+body{overscroll-behavior-y:none;min-height:100vh;min-height:100dvh}
+body::before{top:-35vh!important;bottom:-35vh!important;left:0;right:0}
+.profile-sheet,.sheet,.scrim{overscroll-behavior:none}
+/* selector de foto: tomar foto o elegir archivo */
+.pick-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pick{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:6px;min-height:46px;border-radius:14px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-weight:600;font-size:14px;cursor:pointer}
+.pick input{position:absolute;inset:0;opacity:0;cursor:pointer}
+.pick-prev{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
+.pick-prev img{width:56px;height:40px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
+.pick-prev.ok{color:var(--ok);font-weight:600}
+/* notificaciones */
+.nt-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.nt-badge{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--accent);color:var(--on-accent)}
+.nt-perm{display:flex;gap:12px;align-items:center;padding:14px;border-radius:18px;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+.nt-perm .ico{font-size:24px}.nt-perm b{display:block}.nt-perm .grow{flex:1;min-width:0}
+.nt-group{font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:6px 2px 0}
+.nt-item{display:flex;gap:12px;align-items:flex-start;padding:12px;border-radius:16px;background:var(--surface);border:1px solid var(--line)}
+.nt-item .nt-ic{width:40px;height:40px;flex:0 0 40px;border-radius:13px;display:grid;place-items:center;font-size:19px;background:color-mix(in srgb,var(--accent) 16%,transparent)}
+.nt-item.bad .nt-ic{background:var(--bad-soft)}.nt-item.ok .nt-ic{background:var(--ok-soft)}
+.nt-item .nt-tx{flex:1;min-width:0;font-size:14px;line-height:1.4}
+.nt-item .nt-tm{font-size:12px;color:var(--muted);margin-top:3px}
+.nt-item.unread{border-color:color-mix(in srgb,var(--accent) 55%,transparent)}
+.nt-item.unread .nt-tx{font-weight:600}
+.nt-dot{width:9px;height:9px;border-radius:50%;background:var(--accent);flex:0 0 9px;margin-top:6px}
 button,.item,.chip,.opt,.iconbtn,.pet-use{-webkit-tap-highlight-color:transparent;touch-action:manipulation}
 /* iOS amplía toda la página al enfocar un campo con letra menor a 16px: se evita */
 .field input,.field select,.field textarea{font-size:16px}
@@ -554,7 +578,7 @@ const svg=n=>'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-
 /* ============ reglas del negocio (ajustables) ============ */
 /* Nivel 1 paga en 1 a 2 cuotas; niveles 2 a 4 en 1 a 3 (más cuotas, más interés). Cada nivel tiene su color (h = tono) y su tope de préstamo. */
 const LEVELS=[
- {name:'Ámbar',min:0,limit:50,maxN:2,h:38},
+ {name:'Ámbar',min:0,limit:50,maxN:2,h:24},
  {name:'Jade',min:121,limit:70,maxN:3,h:158},
  {name:'Zafiro',min:241,limit:90,maxN:3,h:218},
  {name:'Rubí',min:500,limit:110,maxN:3,h:348}
@@ -577,6 +601,9 @@ let memPin=null;
 const getPin=()=>{try{return localStorage.getItem(PIN_KEY)||memPin}catch(e){return memPin}};
 const setPin=h=>{memPin=h;try{localStorage.setItem(PIN_KEY,h)}catch(e){}};
 async function hashPin(p){try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('quincena:'+p));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){return 'x'+p}}
+/* Soporte: WhatsApp 0422-0018255 (el número no se muestra en la app). */
+const SUPPORT_WA='https://wa.me/584220018255?text='+encodeURIComponent('Hola, necesito ayuda con mi cuenta de Quincena.');
+const APP_VERSION='3.2';
 const MIN_AMOUNT=10, STEP=5, GAP_DAYS=15;
 const STATUS_LABEL={paid:['Pagada','ok'],validating:['En validación','sea'],pending:['Pendiente','warn'],overdue:['Vencida','bad']};
 
@@ -770,6 +797,7 @@ const Backend={
   stop(){clearInterval(this.poll);clearTimeout(this.timer);clearTimeout(this.retryTimer);this.on=false},
   apply(d){
     if(!d||!d.state||d.state.v!==3)return;
+    Push.fromNotes(d.state);
     S=d.state;this.ver=d.version;SHIFT=S.shift||0;this.pending=null;
     this.cache();render();renderSheet();
   },
@@ -823,10 +851,41 @@ if(Backend.configured()){
 }
 /* Tras conectar: cierra la pantalla de entrada si la sesión era válida y la muestra si caducó. */
 function afterConnect(){
+  try{Push.seen(S.notes.filter(n=>n.read).map(n=>n.id));Push.reminders()}catch(e){}
   if(Backend.on&&ui.sheet&&ui.sheet.type==='authHome'){ui.sheet=S.user.tutorialDone?null:{type:'tutorial',step:0};render();renderSheet()}
   else if(Backend.configured()&&!Backend.on&&Backend.status==='auth'&&!(ui.sheet&&['authHome','signup','tutorial'].includes(ui.sheet.type))){ui.sheet={type:'authHome'};renderSheet()}
   hydratePrivateImages(document);
 }
+
+/* ============ notificaciones en el teléfono ============ */
+/* Muestra en el teléfono los avisos nuevos del prestamista y el recordatorio del día anterior al vencimiento.
+   Funcionan con la app abierta o en segundo plano. Para recibirlas con la app cerrada hace falta un servidor de envío (Web Push). */
+const Push={
+  key:'quincena.notified',
+  state(){try{const ios=/iPhone|iPad|iPod/.test(navigator.userAgent),standalone=window.navigator.standalone===true||(window.matchMedia&&matchMedia('(display-mode: standalone)').matches);if(typeof Notification==='undefined')return ios&&!standalone?'ios-install':'unsupported';return Notification.permission}catch(e){return 'unsupported'}},
+  async ask(){try{if(typeof Notification==='undefined')return 'unsupported';const r=await Notification.requestPermission();if(r==='granted'){this.seen(S.notes.map(n=>n.id));this.reminders()}return r}catch(e){return 'unsupported'}},
+  seenSet(){try{return new Set(JSON.parse(localStorage.getItem(this.key)||'[]'))}catch(e){return new Set()}},
+  seen(ids){try{const s=this.seenSet();ids.forEach(i=>s.add(String(i)));localStorage.setItem(this.key,JSON.stringify([...s].slice(-400)))}catch(e){}},
+  async show(title,body,tag){
+    if(this.state()!=='granted')return false;
+    const opt={body,tag:tag||'quincena',icon:'icon-192.png',badge:'icon-192.png',data:{url:location.href.split('#')[0]}};
+    try{if(navigator.serviceWorker){const reg=await navigator.serviceWorker.getRegistration();if(reg){await reg.showNotification(title,opt);return true}}}catch(e){}
+    try{new Notification(title,opt);return true}catch(e){return false}
+  },
+  fromNotes(next){
+    if(ui.role!=='cliente'||this.state()!=='granted'||!next||!Array.isArray(next.notes))return;
+    const seen=this.seenSet(),fresh=next.notes.filter(n=>n.to==='cliente'&&!n.read&&!seen.has(String(n.id)));
+    if(!fresh.length)return;
+    this.seen(fresh.map(n=>n.id));
+    fresh.slice(0,3).forEach(n=>this.show('Quincena',n.text,'n'+n.id));
+  },
+  reminders(){
+    if(ui.role!=='cliente'||this.state()!=='granted'||!isRegistered())return;
+    const seen=this.seenSet(),t=today(),out=[];
+    reminders().forEach(r=>{const k='r'+t+':'+r.text;if(!seen.has(k)){out.push(k);this.show('Quincena · recordatorio',r.text,k)}});
+    if(out.length)this.seen(out);
+  }
+};
 
 /* ============ cálculos ============ */
 const level=()=>{const o=Number(S.user.levelOverride);if(o>=1&&o<=LEVELS.length)return LEVELS[o-1];let L=LEVELS[0];LEVELS.forEach(l=>{if(S.user.points>=l.min)L=l});return L};
@@ -919,6 +978,15 @@ function proofThumb(l,i){
   if(!i.proofData)return '<div class="info">Este pago llegó sin comprobante adjunto.</div>';
   return '<button class="proof" data-a="viewProof" data-l="'+l.id+'" data-n="'+i.n+'" aria-label="Ver comprobante adjunto"><img loading="lazy" decoding="async" src="'+esc(safeSrc(i.proofData))+'" alt="Vista previa del comprobante"><span><b>Ver comprobante</b><br><span class="small muted">Toca para ampliar</span></span></button>';
 }
+/* Selector de foto: el cliente elige entre tomar la foto con la cámara o adjuntar una imagen guardada. */
+function photoPicker(id,key,label,hint){
+  const f=ui.pick&&ui.pick[key];
+  return '<div class="field"><span class="label">'+esc(label)+'</span><div class="pick-row">'+
+    '<label class="pick">📷 Tomar foto<input type="file" id="'+id+'Cam" accept="image/*" capture="environment" data-pick="'+key+'" aria-label="'+esc(label)+': tomar foto"></label>'+
+    '<label class="pick">🖼️ Elegir archivo<input type="file" id="'+id+'" accept="image/*" data-pick="'+key+'" aria-label="'+esc(label)+': elegir archivo"></label></div>'+
+    '<div class="pick-prev'+(f?' ok':'')+'" id="pick-'+key+'">'+(f?'✓ '+esc(f.name||'Foto lista'):esc(hint||'Ninguna foto seleccionada todavía'))+'</div></div>';
+}
+function pickedFile(key,sel){return (ui.pick&&ui.pick[key])||($(sel)&&$(sel).files&&$(sel).files[0])||null}
 function shrink(file){return new Promise((res,rej)=>{
   const r=new FileReader();r.onerror=rej;
   r.onload=()=>{const im=new Image();im.onerror=rej;
@@ -955,6 +1023,7 @@ function vInicio(){
     const cr=creditReview(), complete=identityDocsReady();
     h+='<section class="card stack"><div class="row"><h2>Tu línea de crédito</h2><span class="pill '+(cr.status==='rejected'?'bad':'warn')+'">'+esc(creditStatusLabel(cr.status))+'</span></div><p class="muted" style="margin:0">'+(cr.status==='rejected'?'Tu solicitud de línea de crédito no fue aprobada. '+(cr.reason?'Motivo: '+esc(cr.reason):'Contacta al prestamista para más información.'):cr.status==='docs'?'El prestamista necesita fotos nuevas de tu cédula y de tu rostro'+(cr.reason?': '+esc(cr.reason):'.'):'El prestamista debe revisar tu identidad y aprobar el límite antes de que puedas solicitar préstamos.')+'</p>'+(complete?'':cr.status==='docs'?'<button class="btn" data-a="profileDocs">Enviar fotos nuevas</button>':'<div class="info">Faltan documentos de identidad. Entra en Información personal y pulsa “Completar verificación”.</div>')+'</section>';
   }
+  if(Backend.on&&ui.role==='cliente'&&Push.state()==='default'&&!ui.pushHidden)h+='<div class="nt-perm"><span class="ico">🔔</span><span class="grow"><b>Activa las notificaciones</b><span class="small muted">Te avisaremos cuando aprueben tu préstamo o se acerque un pago.</span></span><button class="btn sm" data-a="pushOn">Activar</button><button class="iconbtn sm" data-a="pushHide" aria-label="Ahora no">✕</button></div>';
   if(adminBlocked())h+='<div class="alert">'+svg('warn')+'<span><strong>Tu cuenta está bloqueada</strong><span class="small">No puedes solicitar préstamos por ahora. Contacta al prestamista.</span></span></div>';
   if(od>0)h+='<button class="alert" data-a="tab" data-v="prestamos">'+svg('warn')+'<span><strong>Tienes una cuota vencida</strong><span class="small">Total vencido: '+money(od)+' · incluye el interés por pago tardío</span></span></button>';
   h+='<section class="hero" aria-label="Solicitar préstamo"><div class="label">¿Cuánto necesitas?</div>';
@@ -1397,11 +1466,10 @@ function sheetHTML(){
     body='<div class="logo-hero" role="img" aria-label="Quincena"></div><h2 style="text-align:center">Completa tu cuenta</h2><p class="muted" style="margin:0;text-align:center">Completa tus datos tal como aparecen en tu documento y elige la contraseña de tu cuenta.</p><div class="auth-note">Con tu cédula y esta contraseña podrás entrar desde cualquier teléfono o navegador.</div>'+
       '<div class="field"><label class="label" for="suName">Nombre completo</label><input type="text" id="suName" autocomplete="name" placeholder="Ej. Carlos Andrés Pérez" value="'+esc(pre)+'"></div>'+
       '<div class="field"><label class="label" for="suCI">Cédula de identidad</label><input type="text" id="suCI" inputmode="text" autocomplete="off" placeholder="V-12345678" value="'+esc((S.user.profile||{}).ci||'')+'"></div>'+ 
-      '<div class="info"><b>Verificación para la línea de crédito</b><br>Debes adjuntar una foto clara de tu cédula y una foto de tu rostro (selfie). El prestamista revisará estos documentos para decidir si aprueba tu línea.</div>'+
+      '<div class="info"><b>Verificación para la línea de crédito</b><br>Debes adjuntar una foto clara de la parte delantera de tu cédula y una foto de tu rostro (selfie). El prestamista revisará estos documentos para decidir si aprueba tu línea.</div>'+
       '<div class="field"><label class="label" for="suPass">Contraseña de tu cuenta</label><input type="password" id="suPass" minlength="8" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></div>'+ 
       '<div class="field"><label class="label" for="suPass2">Repite la contraseña</label><input type="password" id="suPass2" minlength="8" autocomplete="new-password" placeholder="Otra vez"></div>'+ 
-      '<div class="field"><label class="label" for="suFront">Foto de tu cédula (parte delantera)</label><input type="file" id="suFront" accept="image/*" capture="environment" required></div>'+ 
-      '<div class="field"><label class="label" for="suBack">Cédula · parte trasera (opcional)</label><input type="file" id="suBack" accept="image/*" capture="environment"></div>'+ 
+      photoPicker('suFront','front','Foto de tu cédula (parte delantera)')+ 
       '<div class="field"><label class="label" for="suSelfie">Foto de tu cara (selfie)</label><input type="file" id="suSelfie" accept="image/*" capture="user" required></div>'+ 
       '<div class="small muted">Usaremos estas fotos únicamente para la verificación de tu identidad y revisión de la línea de crédito. Elige imágenes claras.</div>'+ 
       '<div class="err" id="suerr" role="alert"></div><button class="btn" data-a="signupSave">Crear cuenta</button>';
@@ -1411,7 +1479,7 @@ function sheetHTML(){
     const phone=pr.phone||pm.phone||'', ci=pr.ci||pm.ci||'', email=pr.email||'';
     const fullName=S.user.fullName||S.user.name||'Tu nombre completo';
     const initials=String(fullName).trim().split(/\s+/).filter(Boolean).slice(0,2).map(x=>x[0]).join('').toUpperCase()||'QR';
-    body='<div class="profile-page"><section class="profile-head"><button class="profile-back" data-a="profileClose" aria-label="Volver">'+svg('back')+'</button><div class="profile-avatar">'+esc(initials)+'</div><h1>'+esc(fullName)+'</h1><div class="profile-rank"><span class="rank-mark">✦</span> '+esc(level().name)+' <span class="rank-chevron">›</span></div></section><main class="profile-content"><h2>Información personal</h2><div class="profile-info-list"><div class="profile-row"><span class="profile-flag">🇻🇪</span><div class="profile-row-text"><small>País</small><strong>Venezuela</strong></div></div><div class="profile-row"><span class="profile-icon id-icon">'+svg('id')+'</span><div class="profile-row-text"><small>Número de identificación</small><strong>'+esc(ci||'Agrega tu identificación')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="ci">Editar <span>›</span></button></div><div class="profile-row"><span class="profile-icon mail-icon">'+svg('mail')+'</span><div class="profile-row-text"><small>Correo electrónico</small><strong>'+esc(email||'Añadir correo electrónico')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="email">Editar <span>›</span></button></div><div class="profile-row"><span class="profile-icon phone-icon">'+svg('phone')+'</span><div class="profile-row-text"><small>Número de teléfono</small><strong>'+esc(phone||'Añadir número de teléfono')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="phone">Editar <span>›</span></button></div></div><h2 class="profile-section-title">Ayuda y soporte</h2><div class="profile-support-stack"><button class="profile-support-row" data-a="faq"><span class="profile-support-icon faq-icon">'+svg('help')+'</span><span class="profile-row-text"><strong>Preguntas frecuentes</strong><small>Encuentra respuestas a tus dudas</small></span><span class="profile-support-arrow">'+svg('chevron')+'</span></button><a class="profile-support-row" href="https://wa.me/584248411730?s=p" target="_blank" rel="noopener noreferrer"><span class="profile-support-icon wa-icon">'+svg('whatsapp')+'</span><span class="profile-row-text"><strong>Contáctanos por WhatsApp</strong><small>WhatsApp 0424 8411730</small></span><span class="profile-support-arrow">'+svg('chevron')+'</span></a></div><button class="profile-tutorial" data-a="profileDocs">Completar verificación de identidad</button><button class="profile-tutorial" data-a="tutorialRestart">Ver tutorial de la aplicación</button><button class="profile-tutorial" data-a="authLogout">Cerrar sesión</button><p class="profile-note">Cuando hay conexión, tus datos se guardan en tu cuenta. No compartas tu cédula ni capturas de pago en dispositivos públicos.</p></main></div>';
+    body='<div class="profile-page"><section class="profile-head"><button class="profile-back" data-a="profileClose" aria-label="Volver">'+svg('back')+'</button><div class="profile-avatar">'+esc(initials)+'</div><h1>'+esc(fullName)+'</h1><div class="profile-rank"><span class="rank-mark">✦</span> '+esc(level().name)+' <span class="rank-chevron">›</span></div></section><main class="profile-content"><h2>Información personal</h2><div class="profile-info-list"><div class="profile-row"><span class="profile-flag">🇻🇪</span><div class="profile-row-text"><small>País</small><strong>Venezuela</strong></div></div><div class="profile-row"><span class="profile-icon id-icon">'+svg('id')+'</span><div class="profile-row-text"><small>Número de identificación</small><strong>'+esc(ci||'Agrega tu identificación')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="ci">Editar <span>›</span></button></div><div class="profile-row"><span class="profile-icon mail-icon">'+svg('mail')+'</span><div class="profile-row-text"><small>Correo electrónico</small><strong>'+esc(email||'Añadir correo electrónico')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="email">Editar <span>›</span></button></div><div class="profile-row"><span class="profile-icon phone-icon">'+svg('phone')+'</span><div class="profile-row-text"><small>Número de teléfono</small><strong>'+esc(phone||'Añadir número de teléfono')+'</strong></div><button class="profile-edit" data-a="profileEdit" data-v="phone">Editar <span>›</span></button></div></div><h2 class="profile-section-title">Ayuda y soporte</h2><div class="profile-support-stack"><button class="profile-support-row" data-a="faq"><span class="profile-support-icon faq-icon">'+svg('help')+'</span><span class="profile-row-text"><strong>Preguntas frecuentes</strong><small>Encuentra respuestas a tus dudas</small></span><span class="profile-support-arrow">'+svg('chevron')+'</span></button><a class="profile-support-row" href="'+SUPPORT_WA+'" target="_blank" rel="noopener noreferrer"><span class="profile-support-icon wa-icon">'+svg('whatsapp')+'</span><span class="profile-row-text"><strong>Contáctanos por WhatsApp</strong><small>Soporte · te respondemos por chat</small></span><span class="profile-support-arrow">'+svg('chevron')+'</span></a></div><button class="profile-tutorial" data-a="profileDocs">Completar verificación de identidad</button><button class="profile-tutorial" data-a="tutorialRestart">Ver tutorial de la aplicación</button><button class="profile-tutorial" data-a="authLogout">Cerrar sesión</button><p class="profile-note">Versión '+APP_VERSION+(Backend.on?' · conectada':'')+'. Cuando hay conexión, tus datos se guardan en tu cuenta. No compartas tu cédula ni capturas de pago en dispositivos públicos.</p></main></div>';
   }
   if(s.type==='profileEdit'){
     const pr=S.user.profile||{}, pm=S.user.pm||{};
@@ -1473,8 +1541,7 @@ function sheetHTML(){
   if(s.type==='profileDocs'){
     const d=identityDocs();
     body='<h2>Verificación de identidad</h2><p class="muted" style="margin:0">Adjunta una foto clara de tu cédula y una foto de tu rostro (selfie). El prestamista las revisará para decidir sobre tu línea de crédito.</p>'+ 
-      '<div class="field"><label class="label" for="docFront">Cédula · parte delantera</label><input type="file" id="docFront" accept="image/*" capture="environment" '+(d.front?'':'required')+'><div class="small muted">'+(d.front?'Imagen guardada; no es necesario volver a subirla.':'Obligatorio')+'</div></div>'+ 
-      '<div class="field"><label class="label" for="docBack">Cédula · parte trasera (opcional)</label><input type="file" id="docBack" accept="image/*" capture="environment"><div class="small muted">'+(d.back?'Imagen guardada; no es necesario volver a subirla.':'Opcional')+'</div></div>'+ 
+      photoPicker('docFront','front','Cédula · parte delantera',d.front&&!docsRequested()?'Imagen guardada; no es necesario volver a subirla.':'')+ 
       '<div class="field"><label class="label" for="docSelfie">Foto del rostro (selfie)</label><input type="file" id="docSelfie" accept="image/*" capture="user" '+(d.selfie?'':'required')+'><div class="small muted">'+(d.selfie?'Imagen guardada; no es necesario volver a subirla.':'Obligatorio')+'</div></div>'+ 
       '<div class="err" id="docErr" role="alert">'+esc(ui.err||'')+'</div><div class="row"><button class="btn ghost" data-a="close">Cancelar</button><button class="btn" data-a="identityDocsSave">Enviar documentos</button></div>';
   }
@@ -1527,10 +1594,20 @@ function sheetHTML(){
       '<div class="row"><button class="btn ghost" data-a="close">Cancelar</button><button class="btn" data-a="pinok">'+(set?'Guardar PIN':'Entrar')+'</button></div>';
   }
   if(s.type==='notes'){
-    const rem=reminders(), notes=S.notes.filter(n=>n.to===(ui.role==='cliente'?'cliente':'prestamista'));
-    body='<h2>Notificaciones</h2>'+(rem.length?'<div class="label">Recordatorios de pago</div>'+rem.map(r=>'<div class="note"><i style="background:'+(r.bad?'var(--bad)':'var(--accent)')+'"></i><div>'+esc(r.text)+'</div></div>').join(''):'')+
-      '<div class="label">Avisos</div>'+(notes.length?notes.map(n=>'<div class="note read"><i></i><div>'+esc(n.text)+'<div class="small muted">'+fmtD(n.date)+'</div></div></div>').join(''):'<div class="empty">Sin avisos.</div>')+
-      '<div class="info">Los avisos aparecen aquí. Para recibirlos en el teléfono hace falta conectar un servidor que envíe notificaciones push.</div><button class="btn dark" data-a="close">Cerrar</button>';
+    const rem=reminders(), notes=S.notes.filter(n=>n.to===(ui.role==='cliente'?'cliente':'prestamista')), unread=new Set(s.unread||[]);
+    const ICN={pay:'💵',loan:'📄',lvl:'⭐',pet:'🐾',acct:'👤',info:'🔔'};
+    const tone=t=>/(rechaz|no fue|venció|vencida|bloquead|no pudo)/i.test(t)?'bad':/(aprobad|validado|desbloquead|perdonó)/i.test(t)?'ok':'';
+    const dayLabel=d=>{const k=diff(today(),d);return k===0?'Hoy':k===1?'Ayer':fmtD(d)};
+    const groups=[];notes.forEach(n=>{const g=dayLabel(n.date);let last=groups[groups.length-1];if(!last||last.g!==g){last={g,items:[]};groups.push(last)}last.items.push(n)});
+    const perm=Push.state();
+    const permCard=perm==='granted'?'<div class="nt-perm"><span class="ico">🔔</span><span class="grow"><b>Notificaciones activadas</b><span class="small muted">Te avisaremos en este teléfono cuando haya novedades.</span></span><button class="btn sm ghost" data-a="pushTest">Probar</button></div>':
+      perm==='denied'?'<div class="nt-perm"><span class="ico">🔕</span><span class="grow"><b>Notificaciones bloqueadas</b><span class="small muted">Actívalas en los ajustes del navegador para este sitio.</span></span></div>':
+      perm==='ios-install'?'<div class="nt-perm"><span class="ico">📲</span><span class="grow"><b>Recibe avisos en tu iPhone</b><span class="small muted">Toca Compartir → «Añadir a pantalla de inicio», abre Quincena desde el icono y vuelve aquí para activarlas.</span></span></div>':
+      perm==='unsupported'?'':'<div class="nt-perm"><span class="ico">🔔</span><span class="grow"><b>Activa las notificaciones</b><span class="small muted">Te avisaremos de aprobaciones, pagos y vencimientos.</span></span><button class="btn sm" data-a="pushOn">Activar</button></div>';
+    body='<div class="nt-head"><h2>Notificaciones</h2>'+(unread.size?'<span class="nt-badge">'+unread.size+' nueva'+(unread.size>1?'s':'')+'</span>':'')+'</div>'+permCard+
+      (rem.length?'<div class="nt-group">Recordatorios de pago</div>'+rem.map(r=>'<div class="nt-item '+(r.bad?'bad':'')+'"><span class="nt-ic">'+(r.bad?'⚠️':'⏰')+'</span><div class="nt-tx">'+esc(r.text)+'</div></div>').join(''):'')+
+      (groups.length?groups.map(g=>'<div class="nt-group">'+esc(g.g)+'</div>'+g.items.map(n=>{const isNew=unread.has(n.id);return '<div class="nt-item '+tone(n.text)+(isNew?' unread':'')+'"><span class="nt-ic">'+(ICN[logKind(n.text)]||'🔔')+'</span><div class="nt-tx">'+esc(n.text)+'<div class="nt-tm">'+fmtD(n.date)+'</div></div>'+(isNew?'<span class="nt-dot" aria-label="Nueva"></span>':'')+'</div>'}).join('')).join(''):'<div class="empty">Todavía no tienes avisos.</div>')+
+      '<button class="btn dark" data-a="close">Cerrar</button>';
   }
   const isProfile=s.type==='profile', isAuthScreen=['authHome','signupEmail','loginEmail','otpVerify','signup'].includes(s.type);
   return '<div class="scrim '+(isProfile?'profile-scrim':'')+(isAuthScreen?' auth-scrim':'')+'" data-a="scrim"><div class="sheet '+(isProfile?'profile-sheet':'')+'" role="dialog" aria-modal="true">'+(isProfile||isAuthScreen?'':'<div class="grab"></div>')+body+'</div></div>';
@@ -1578,7 +1655,7 @@ const go=()=>{save();render();renderSheet()};
 
 /* ============ acciones ============ */
 const A={
- authCreate(){ui.err='';ui.emailDraft='';ui.emailAuth=null;ui.sheet={type:'signup'};renderSheet()},
+ authCreate(){ui.pick={};ui.err='';ui.emailDraft='';ui.emailAuth=null;ui.sheet={type:'signup'};renderSheet()},
  async clientLogin(){
   const ci=normalizeCI($('#clCI')&&$('#clCI').value),pass=($('#clPass')&&$('#clPass').value)||'',fail=m=>{ui.err=m;const e=$('#clErr');if(e)e.textContent=m};
   if(!/^[VEJGP]?\d{6,9}$/.test(ci)){fail('Escribe una cédula válida. Ejemplo: V-12345678.');return}
@@ -1700,8 +1777,7 @@ const A={
   if(!m){err('Revisa la cédula. Ejemplo: V-12345678.');return}
   if(pass.length<8){err('Elige una contraseña de al menos 8 caracteres.');return}
   if(pass!==pass2){err('Las dos contraseñas no coinciden.');return}
-  const files={front:$('#suFront')?.files?.[0],selfie:$('#suSelfie')?.files?.[0]},backFile=$('#suBack')?.files?.[0];
-  if(backFile)files.back=backFile;
+  const files={front:pickedFile('front','#suFront'),selfie:$('#suSelfie')?.files?.[0]};
   if(!files.front||!files.selfie){err('Adjunta la foto de tu cédula y la foto de tu rostro (selfie).');return}
   if(Object.values(files).some(f=>!f.type.startsWith('image/'))){err('Los archivos deben ser imágenes.');return}
   if(Object.values(files).some(f=>f.size>12*1024*1024)){err('Cada imagen debe pesar menos de 12 MB.');return}
@@ -1729,7 +1805,7 @@ const A={
   }catch(ex){err('No se pudieron procesar las fotos. Prueba con otras imágenes.');if(btn){btn.disabled=false;btn.textContent='Crear cuenta'}}
  },
  async identityDocsSave(){
-  const inputs={front:$('#docFront')?.files?.[0],back:$('#docBack')?.files?.[0],selfie:$('#docSelfie')?.files?.[0]},old=identityDocs(),next={...old};
+  const inputs={front:pickedFile('front','#docFront'),selfie:$('#docSelfie')?.files?.[0]},old=identityDocs(),next={...old};
   const err=m=>{ui.err=m;const e=$('#docErr');if(e)e.textContent=m};
   for(const [k,f] of Object.entries(inputs))if(f&&( !f.type.startsWith('image/')||f.size>12*1024*1024)){err('Cada documento debe ser una imagen menor de 12 MB.');return}
   if(docsRequested()){if(!inputs.front||!inputs.selfie){err('Adjunta una foto nueva de tu cédula y otra de tu rostro.');return}}
@@ -1744,7 +1820,7 @@ const A={
   notify('prestamista','El cliente '+(S.user.fullName||S.user.name)+' envió o actualizó sus documentos. Revisa su línea de crédito.');
   save();ui.sheet={type:'profile'};render();renderSheet();toast('Documentos enviados para revisión');
  },
- profileDocs(){if(identityDocsReady()){toast('Ya enviaste tus documentos. Si necesitas actualizarlos, contacta al prestamista.');return}ui.err='';ui.sheet={type:'profileDocs'};renderSheet()},
+ profileDocs(){ui.pick={};if(identityDocsReady()){toast('Ya enviaste tus documentos. Si necesitas actualizarlos, contacta al prestamista.');return}ui.err='';ui.sheet={type:'profileDocs'};renderSheet()},
  viewIdentityDoc(v){ui.sheet={type:'identityDoc',doc:v};renderSheet()},
  creditApprove(){
   if(!isLender()){toast('Solo el prestamista puede aprobar una línea.');return}
@@ -1853,8 +1929,12 @@ const A={
     toast(ok?'Pago enviado. Queda en validación.':'Pago enviado, pero este navegador no pudo guardar el comprobante.');
   }finally{ui.busy=false}},
  bell(){
-  S.notes.forEach(n=>{if(n.to===(ui.role==='cliente'?'cliente':'prestamista'))n.read=true});save();
-  ui.sheet={type:'notes'};renderSheet();render()},
+  const who=ui.role==='cliente'?'cliente':'prestamista',unread=S.notes.filter(n=>n.to===who&&!n.read).map(n=>n.id);
+  S.notes.forEach(n=>{if(n.to===who)n.read=true});save();
+  ui.sheet={type:'notes',unread};renderSheet();render()},
+ async pushOn(){const r=await Push.ask();renderSheet();render();toast(r==='granted'?'Notificaciones activadas en este teléfono.':r==='denied'?'Las notificaciones están bloqueadas. Actívalas en los ajustes del navegador.':'No se activaron las notificaciones.')},
+ pushHide(){ui.pushHidden=true;render()},
+ pushTest(){Push.show('Quincena','Así verás tus avisos de pagos y préstamos.','test-'+Date.now())},
  close(){if(ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup','tutorial'].includes(ui.sheet.type))return;ui.sheet=null;renderSheet()},
  pmode(v){ui.sheet.mode=v;const r=$('#ref')?$('#ref').value:'';renderSheet();if($('#ref'))$('#ref').value=r},
  copy(v,e){const t=e.dataset.t;const bad=()=>toast('No se pudo copiar. Selecciona el texto a mano.');
@@ -2057,6 +2137,15 @@ document.addEventListener('pointerup',finishNavDrag,{passive:false});
 document.addEventListener('pointercancel',finishNavDrag,{passive:true});
 document.addEventListener('click',e=>{if(suppressNavClick){suppressNavClick=false;clearTimeout(navSuppressTimer);if(e.cancelable)e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();}},true);
 document.addEventListener('change',e=>{
+  if(e.target&&e.target.dataset&&e.target.dataset.pick){
+    const k=e.target.dataset.pick,f=e.target.files&&e.target.files[0];if(!f)return;
+    ui.pick=ui.pick||{};ui.pick[k]=f;
+    const box=document.getElementById('pick-'+k);
+    if(box){box.className='pick-prev ok';box.textContent='';let url='';try{url=URL.createObjectURL(f)}catch(_){}
+      if(url){const im=document.createElement('img');im.src=url;im.alt='Vista previa';box.appendChild(im)}
+      box.appendChild(document.createTextNode('✓ Foto lista'))}
+    return;
+  }
   if(!e.target||e.target.id!=='importFile')return;
   const f=e.target.files&&e.target.files[0];e.target.value='';
   if(!f||!isLender())return;
