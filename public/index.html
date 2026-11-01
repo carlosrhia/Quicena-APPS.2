@@ -559,6 +559,15 @@ const LEVELS=[
  {name:'Zafiro',min:241,limit:90,maxN:3,h:218},
  {name:'Rubí',min:500,limit:110,maxN:3,h:348}
 ];
+/* Ajustes globales del negocio: los define el administrador en el panel (Ajustes) y llegan desde Supabase. */
+let GS={};
+function applySettings(d){
+  if(!d||typeof d!=='object')return;
+  GS=d;
+  if(Array.isArray(d.levels))d.levels.forEach((x,k)=>{if(LEVELS[k]&&x){const lim=Number(x.limit),mx=Number(x.maxN);if(lim>0)LEVELS[k].limit=lim;if(mx>=1&&mx<=3)LEVELS[k].maxN=mx}});
+  if(Number(d.pipoMax)>=0)PIPO_MAX=Number(d.pipoMax);
+}
+const moraAmt=()=>GS.mora!=null&&!isNaN(Number(GS.mora))?Number(GS.mora):S.config.mora;
 const MORA_DEFAULT=4; /* interés fijo si la cuota sigue sin pagar al pasar su día de vencimiento */
 const DEFAULT_RATES={1:5,2:10,3:15}; /* interés total en %, según el número de cuotas (valores de ejemplo) */
 const BANKS=['Banesco','Banco de Venezuela','Mercantil','BBVA Provincial','BNC','Bancamiga','Banplus','Bicentenario','Banco del Tesoro','Banco Exterior','Bancaribe','Banco Caroní'];
@@ -703,6 +712,7 @@ const Backend={
       S.user.identityDocs=docs;
       const ins=await this.sb.from('clients').insert({id:uid,name,ci,state:S}).select('version,state').single();
       if(ins.error)throw ins.error;
+      await this.loadSettings();
       this.clientId=uid;this.savePass(ci);this.on=true;this.status='online';
       this.ver=ins.data.version;S=ins.data.state;SHIFT=S.shift||0;this.cache();this.startPoll();
       return {ok:true};
@@ -716,10 +726,15 @@ const Backend={
       const row=await this.sb.from('clients').select('id,version,state').eq('id',r.data.user.id).maybeSingle();
       if(row.error)return {ok:false,error:this.errMsg(row.error,'No se pudo abrir tu expediente.')};
       if(!row.data){await this.sb.auth.signOut();return {ok:false,error:'Tu registro quedó incompleto. Pulsa «Crear cuenta» y repítelo con la misma cédula y contraseña.'}}
+      await this.loadSettings();
       this.clientId=row.data.id;this.savePass(ci);this.on=true;this.status='online';
       this.ver=row.data.version;S=row.data.state;SHIFT=S.shift||0;this.cache();this.startPoll();
       return {ok:true};
     }catch(e){return {ok:false,error:this.errMsg(e,'No se pudo iniciar sesión.')}}
+  },
+  async loadSettings(){
+    if(!this.sb)return;
+    try{const {data}=await this.sb.from('app_settings').select('data').eq('id',1).maybeSingle();if(data&&data.data){applySettings(data.data);this.settingsAt=Date.now()}}catch(e){}
   },
   async logoutClient(){this.stop();this.clientId='';this.ver=0;this.pending=null;try{if(this.sb)await this.sb.auth.signOut()}catch(e){}},
   /* El personal trabaja en /admin.html; desde la app del cliente no se abren expedientes ajenos. */
@@ -735,6 +750,7 @@ const Backend={
       const row=await this.sb.from('clients').select('id,version,state').eq('id',sess.user.id).maybeSingle();
       if(row.error)throw row.error;
       if(!row.data){this.on=false;this.status='auth';return false}
+      await this.loadSettings();
       this.clientId=row.data.id;this.on=true;this.status='online';
       this.apply({version:row.data.version,state:row.data.state});
       this.startPoll();
@@ -747,6 +763,7 @@ const Backend={
     this.poll=setInterval(()=>{
       if(document.hidden||!this.on)return;
       if(this.pending&&!ui.sheet){this.apply(this.pending);return}
+      if(Date.now()-(this.settingsAt||0)>120000)this.loadSettings().then(()=>{if(!ui.sheet)render()});
       this.pull().catch(()=>{this.status='offline'});
     },8000);
   },
@@ -812,7 +829,7 @@ function afterConnect(){
 }
 
 /* ============ cálculos ============ */
-const level=()=>{let L=LEVELS[0];LEVELS.forEach(l=>{if(S.user.points>=l.min)L=l});return L};
+const level=()=>{const o=Number(S.user.levelOverride);if(o>=1&&o<=LEVELS.length)return LEVELS[o-1];let L=LEVELS[0];LEVELS.forEach(l=>{if(S.user.points>=l.min)L=l});return L};
 const nextLevel=()=>LEVELS[LEVELS.indexOf(level())+1]||null;
 const instStatus=i=>i.status==='pending'&&i.due<today()?(abonoCoversInTime(i)?'validating':'overdue'):i.status;
 const unpaid=l=>l.installments.filter(i=>i.status!=='paid');
@@ -826,16 +843,17 @@ const owed=i=>i.balanceDue!=null?r2(Math.max(0,i.balanceDue)):r2(i.amount+(i.mor
 /* Si el cliente envió a tiempo un abono que cubre todo el saldo y el prestamista aún no lo valida, no se cobra mora por la demora de la revisión */
 const abonoCoversInTime=i=>(i.abonos||[]).some(a=>a.status==='validating'&&a.submittedOn<=i.due&&(+a.amount||0)>=owed(i)-0.001);
 const owedSum=a=>r2(a.reduce((s,x)=>s+owed(x),0));
-const baseAvailable=()=>!creditApproved()||blocked()?0:Math.max(0,r2(Math.min(level().limit,approvedLimit())-usedLine()));
+const adminBlocked=()=>!!S.user.accountBlocked;
+const baseAvailable=()=>!creditApproved()||blocked()||adminBlocked()?0:Math.max(0,r2(Math.min(level().limit,approvedLimit())-usedLine()));
 /* Burbujita puede dejar un único bono de $10 listo para la próxima solicitud cuando la línea aprobada está agotada. */
-const available=()=>!creditApproved()||blocked()?0:r2(baseAvailable()+Math.max(0,Number(S.user.petBonusCredit)||0));
+const available=()=>!creditApproved()||blocked()||adminBlocked()?0:r2(baseAvailable()+Math.max(0,Number(S.user.petBonusCredit)||0));
 const cuotaOpts=L=>Array.from({length:L.maxN},(_,k)=>k+1);
 /* Pipo: máximo 3 usos por mes calendario (cada uso cuesta 2 días de racha) */
-const PIPO_MAX=3;
+let PIPO_MAX=3;
 const monthKey=()=>today().slice(0,7);
 const pipoUsed=()=>{const p=S.user.pipo;return p&&p.m===monthKey()?(Number(p.c)||0):0};
 const pipoLeft=()=>Math.max(0,PIPO_MAX-pipoUsed());
-const pctOf=n=>S.config.rates[n]!=null?S.config.rates[n]:(DEFAULT_RATES[n]||0);
+const pctOf=n=>GS.rates&&GS.rates[n]!=null?Number(GS.rates[n]):S.config.rates[n]!=null?S.config.rates[n]:(DEFAULT_RATES[n]||0);
 const quote=(amount,n)=>{
   const pct=pctOf(n), total=r2(amount*(1+pct/100)), c=r2(total/n);
   const list=[];for(let k=1;k<=n;k++)list.push({n:k,due:addDays(today(),GAP_DAYS*k),amount:k===n?r2(total-c*(n-1)):c});
@@ -843,7 +861,7 @@ const quote=(amount,n)=>{
 };
 const allInst=()=>{const a=[];S.loans.filter(l=>l.status==='activo').forEach(l=>l.installments.forEach(i=>{if(i.status!=='paid')a.push({loan:l,i})}));return a.sort((x,y)=>x.i.due<y.i.due?-1:1)};
 const overdueTotal=()=>allInst().filter(x=>instStatus(x.i)==='overdue').reduce((s,x)=>s+owed(x.i),0);
-const reminders=()=>allInst().filter(x=>{const s=instStatus(x.i);return s==='overdue'||(s==='pending'&&diff(x.i.due,today())<=3)})
+const reminders=()=>allInst().filter(x=>{const s=instStatus(x.i);return s==='overdue'||(GS.autoReminder!==false&&s==='pending'&&diff(x.i.due,today())<=1)})
   .map(x=>({text:instStatus(x.i)==='overdue'?'Cuota '+x.i.n+' de '+x.loan.n+' vencida: '+money(owed(x.i)):'Cuota '+x.i.n+' de '+x.loan.n+' ('+money(owed(x.i))+'): '+dueText(x.i.due).toLowerCase(),bad:instStatus(x.i)==='overdue'}));
 function logKind(t){t=String(t||'');
   if(/^Perfil de prueba/.test(t))return 'info';
@@ -866,30 +884,32 @@ const notify=(to,text)=>{S.notes.unshift({id:S.seq++,to,text,date:today(),read:f
 function firstName(){return String((S.user&&S.user.name)||'').trim().split(/\s+/)[0]||''}
 function isRegistered(){return !!(S.user.registered||((S.user.profile||{}).ci&&String(S.user.fullName||S.user.name||'').trim().includes(' ')))}
 const identityDocs=()=>S.user.identityDocs||{};
-const identityDocsReady=(d=identityDocs())=>!!(d.front&&d.selfie);
+const docsRequested=()=>(S.user.creditLineReview||{}).status==='docs';
+const identityDocsReady=(d=identityDocs())=>!docsRequested()&&!!(d.front&&d.selfie);
 const creditReview=()=>S.user.creditLineReview||{status:'pending',limit:0,requestedAt:S.user.createdAt||today(),reviewedAt:null,reason:''};
 const creditApproved=()=>creditReview().status==='approved';
 const approvedLimit=()=>creditApproved()?Math.max(0,Math.min(Number(creditReview().limit)||level().limit,level().limit)):0;
-const creditStatusLabel=st=>({pending:'Pendiente de revisión',approved:'Aprobada',rejected:'No aprobada'}[st]||'Pendiente de revisión');
+const creditStatusLabel=st=>({pending:'Pendiente de revisión',approved:'Aprobada',rejected:'No aprobada',docs:'Fotos nuevas solicitadas'}[st]||'Pendiente de revisión');
 function applyMora(){
+  if(GS.autoMora===false)return;
   let ch=false;const t=today();
   S.loans.forEach(l=>{if(l.status!=='activo')return;l.installments.forEach(i=>{
-    if(i.status==='pending'&&i.due<t&&!i.mora&&!abonoCoversInTime(i)){
-      let mora=S.config.mora;
+    if(i.status==='pending'&&i.due<t&&!i.mora&&!i.moraWaived&&!abonoCoversInTime(i)){
+      let mora=moraAmt();
       if(i.michiDiscount){
-        mora=r2(S.config.mora/2);
+        mora=r2(moraAmt()/2);
         i.michiDiscount=false;
       }else if((Number(S.user.petMoraDiscount)||0)>0){
-        mora=r2(S.config.mora/2);
+        mora=r2(moraAmt()/2);
         S.user.petMoraDiscount=Math.max(0,(Number(S.user.petMoraDiscount)||0)-1);
       }
       i.mora=mora;if(i.balanceDue!=null)i.balanceDue=r2(i.balanceDue+mora);ch=true;
-      notify('cliente','Tu cuota '+i.n+' de '+l.n+' venció. Se sumó un interés de '+money(mora)+(mora<S.config.mora?' (Michi redujo el recargo a la mitad).':'')+' y tu línea quedó pausada hasta que pagues.');
+      notify('cliente','Tu cuota '+i.n+' de '+l.n+' venció. Se sumó un interés de '+money(mora)+(mora<moraAmt()?' (Michi redujo el recargo a la mitad).':'')+' y tu línea quedó pausada hasta que pagues.');
       notify('prestamista','Cuota '+i.n+' de '+l.n+' vencida sin pago. Se aplicó un interés de '+money(mora)+'.');
     }})});
   if(ch)save();
 }
-const method=id=>S.config.methods.find(m=>m.id===id)||S.config.methods[0];
+const method=id=>{const m=S.config.methods.find(x=>x.id===id)||S.config.methods[0];return GS.payDetail&&(!m||m.id==='pm')?{id:'pm',name:'Pago móvil',detail:String(GS.payDetail)}:m};
 const loanName=l=>'Préstamo de '+money(l.amount);
 function cobroBlock(l){
   const c=l.cobro; if(!c)return '<div class="info">Esta solicitud no trae datos de pago móvil.</div>';
@@ -933,12 +953,13 @@ function vInicio(){
     '<div class="lvl"><i class="sw" style="background:var(--accent)"></i>Nivel <b>'+L.name+'</b> · '+S.user.points+' pts</div></div>';
   if(S.user.registered&&!creditApproved()){
     const cr=creditReview(), complete=identityDocsReady();
-    h+='<section class="card stack"><div class="row"><h2>Tu línea de crédito</h2><span class="pill '+(cr.status==='rejected'?'bad':'warn')+'">'+esc(creditStatusLabel(cr.status))+'</span></div><p class="muted" style="margin:0">'+(cr.status==='rejected'?'Tu solicitud de línea de crédito no fue aprobada. '+(cr.reason?'Motivo: '+esc(cr.reason):'Contacta al prestamista para más información.'):'El prestamista debe revisar tu identidad y aprobar el límite antes de que puedas solicitar préstamos.')+'</p>'+(complete?'':'<div class="info">Faltan documentos de identidad. Entra en Información personal y pulsa “Completar verificación”.</div>')+'</section>';
+    h+='<section class="card stack"><div class="row"><h2>Tu línea de crédito</h2><span class="pill '+(cr.status==='rejected'?'bad':'warn')+'">'+esc(creditStatusLabel(cr.status))+'</span></div><p class="muted" style="margin:0">'+(cr.status==='rejected'?'Tu solicitud de línea de crédito no fue aprobada. '+(cr.reason?'Motivo: '+esc(cr.reason):'Contacta al prestamista para más información.'):cr.status==='docs'?'El prestamista necesita fotos nuevas de tu cédula y de tu rostro'+(cr.reason?': '+esc(cr.reason):'.'):'El prestamista debe revisar tu identidad y aprobar el límite antes de que puedas solicitar préstamos.')+'</p>'+(complete?'':cr.status==='docs'?'<button class="btn" data-a="profileDocs">Enviar fotos nuevas</button>':'<div class="info">Faltan documentos de identidad. Entra en Información personal y pulsa “Completar verificación”.</div>')+'</section>';
   }
+  if(adminBlocked())h+='<div class="alert">'+svg('warn')+'<span><strong>Tu cuenta está bloqueada</strong><span class="small">No puedes solicitar préstamos por ahora. Contacta al prestamista.</span></span></div>';
   if(od>0)h+='<button class="alert" data-a="tab" data-v="prestamos">'+svg('warn')+'<span><strong>Tienes una cuota vencida</strong><span class="small">Total vencido: '+money(od)+' · incluye el interés por pago tardío</span></span></button>';
   h+='<section class="hero" aria-label="Solicitar préstamo"><div class="label">¿Cuánto necesitas?</div>';
   if(blk){
-    h+='<div class="big">'+money(0)+'</div><div class="locked">Tu línea está pausada por una cuota vencida. Al pagarla junto con el interés de '+money(S.config.mora)+' se reactiva.</div>';
+    h+='<div class="big">'+money(0)+'</div><div class="locked">Tu línea está pausada por una cuota vencida. Al pagarla junto con el interés de '+money(moraAmt())+' se reactiva.</div>';
   }else if(av<MIN_AMOUNT){
     const cr=creditReview();
     h+='<div class="big">'+money(av)+'</div><div class="locked">'+(!creditApproved()?(cr.status==='rejected'?'Tu línea no fue aprobada.':'Tu línea de crédito está pendiente de aprobación.'):'No tienes línea disponible ahora. Se libera al pagar tus cuotas.')+'</div>';
@@ -1711,7 +1732,8 @@ const A={
   const inputs={front:$('#docFront')?.files?.[0],back:$('#docBack')?.files?.[0],selfie:$('#docSelfie')?.files?.[0]},old=identityDocs(),next={...old};
   const err=m=>{ui.err=m;const e=$('#docErr');if(e)e.textContent=m};
   for(const [k,f] of Object.entries(inputs))if(f&&( !f.type.startsWith('image/')||f.size>12*1024*1024)){err('Cada documento debe ser una imagen menor de 12 MB.');return}
-  if(!old.front&&!inputs.front||!old.selfie&&!inputs.selfie){err('Debes adjuntar la foto de tu cédula y la de tu rostro.');return}
+  if(docsRequested()){if(!inputs.front||!inputs.selfie){err('Adjunta una foto nueva de tu cédula y otra de tu rostro.');return}}
+  else if(!old.front&&!inputs.front||!old.selfie&&!inputs.selfie){err('Debes adjuntar la foto de tu cédula y la de tu rostro.');return}
   try{for(const k of ['front','back','selfie'])if(inputs[k])next[k]=await shrink(inputs[k]);}
   catch(e){err('No se pudieron procesar las imágenes.');return}
   if(['front','selfie'].some(k=>!next[k])){err('Falta la foto de la cédula o la del rostro.');return}
@@ -1757,7 +1779,7 @@ const A={
  open(v,e){const id=+e.dataset.l;ui.open[id]=!ui.open[id];render()},
  amt(v){draft().amount=+v;render()},
  n(v){draft().n=+v;render()},
- request(){if(S.user.registered&&!creditApproved()){toast('Tu línea de crédito debe ser aprobada por el prestamista primero.');return}draft().method=draft().method||'pm';delete draft().pm;ui.pmFill=null;ui.err='';ui.sheet={type:'request',step:1};renderSheet()},
+ request(){if(adminBlocked()){toast('Tu cuenta está bloqueada. Contacta al prestamista.');return}if(S.user.registered&&!creditApproved()){toast('Tu línea de crédito debe ser aprobada por el prestamista primero.');return}draft().method=draft().method||'pm';delete draft().pm;ui.pmFill=null;ui.err='';ui.sheet={type:'request',step:1};renderSheet()},
  pick(v){draft().method=v;renderSheet()},
  rnext(){
   const bank=($('#pmBank').value||'').trim(), phone=($('#pmPhone').value||'').trim(), ci=($('#pmCI').value||'').trim();

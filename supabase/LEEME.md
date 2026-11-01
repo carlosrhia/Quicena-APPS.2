@@ -103,6 +103,19 @@ Las variables de entorno solo se aplican en despliegues nuevos.
 
 ---
 
+
+## Actualizar a la versión 2 del panel (ajustes del negocio, bloqueo, notas…)
+
+Si ya tenías Quincena funcionando, solo hay que hacer **una cosa** en Supabase:
+
+1. **SQL Editor → New query**, pega otra vez **todo** el archivo [`supabase/schema.sql`](schema.sql) (versión 2) y pulsa **Run**.
+   Es seguro: no borra clientes ni préstamos, solo añade lo nuevo.
+2. Entra al panel → **Ajustes** y revisa las comisiones (vienen en 30 % / 35 % / 40 %), los límites de cada nivel,
+   el recargo por mora, el pago móvil para cobrar y el **capital disponible**. Pulsa **Guardar cambios**.
+
+Lo que guardes en **Ajustes** lo usa la app de los clientes al entrar (y cada 2 minutos): comisiones, límites,
+cuotas máximas, recargo por mora, usos de Pipo y el pago móvil donde te pagan.
+
 ## Uso diario en el panel `/admin.html`
 
 | Qué | Dónde |
@@ -114,7 +127,7 @@ Las variables de entorno solo se aplican en despliegues nuevos.
 | Cobradores | **Usuarios y roles → Nuevo usuario**: correo, contraseña, rol *Cobrador* y sus clientes. Solo ve esos clientes. |
 | Quién hizo qué | Pestaña **Auditoría**. |
 | Cambiar la contraseña de otra persona | Supabase → **Authentication → Users** → el usuario → *Reset password* / *Update user*. |
-| Cliente que olvidó su contraseña | Supabase → **Authentication → Users** → busca `v<cedula>@clientes.quincena.app` → cámbiale la contraseña. |
+| Cliente que olvidó su contraseña | Panel → **Buscar cliente** → su ficha → **Restablecer contraseña**. |
 
 ## Avisos del plan gratuito de Supabase
 
