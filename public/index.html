@@ -596,7 +596,10 @@ const setPin=h=>{memPin=h;try{localStorage.setItem(PIN_KEY,h)}catch(e){}};
 async function hashPin(p){try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('quincena:'+p));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){return 'x'+p}}
 /* Soporte: WhatsApp 0422-0018255 (el número no se muestra en la app). */
 const SUPPORT_WA='https://wa.me/584220018255?text='+encodeURIComponent('Hola, necesito ayuda con mi cuenta de Quincena.');
-const APP_VERSION='3.2';
+const APP_VERSION='3.3';
+/* Foto de la cédula: en Android 13+ Chrome abre el selector de fotos (sin cámara) si el campo acepta solo imágenes.
+   Con un tipo adicional, Android muestra su menú clásico con «Cámara» y «Archivos». En iPhone basta con image/*. */
+const ID_ACCEPT=(typeof navigator!=='undefined'&&/Android/i.test(navigator.userAgent||''))?'image/*,android/force-camera-workaround':'image/*';
 const MIN_AMOUNT=10, STEP=5, GAP_DAYS=15;
 const STATUS_LABEL={paid:['Pagada','ok'],validating:['En validación','sea'],pending:['Pendiente','warn'],overdue:['Vencida','bad']};
 
@@ -1454,7 +1457,7 @@ function sheetHTML(){
       '<div class="info"><b>Verificación para la línea de crédito</b><br>Debes adjuntar una foto clara de la parte delantera de tu cédula y una foto de tu rostro (selfie). El prestamista revisará estos documentos para decidir si aprueba tu línea.</div>'+
       '<div class="field"><label class="label" for="suPass">Contraseña de tu cuenta</label><input type="password" id="suPass" minlength="8" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></div>'+ 
       '<div class="field"><label class="label" for="suPass2">Repite la contraseña</label><input type="password" id="suPass2" minlength="8" autocomplete="new-password" placeholder="Otra vez"></div>'+ 
-      '<div class="field"><label class="label" for="suFront">Foto de tu cédula (parte delantera)</label><input type="file" id="suFront" accept="image/*" required><div class="small muted">Al tocar, tu teléfono te deja tomar la foto o elegir una imagen guardada.</div></div>'+ 
+      '<div class="field"><label class="label" for="suFront">Foto de tu cédula (parte delantera)</label><input type="file" id="suFront" accept="'+ID_ACCEPT+'" required><div class="small muted">Al tocar, tu teléfono te deja tomar la foto o elegir una imagen guardada.</div></div>'+ 
       '<div class="field"><label class="label" for="suSelfie">Foto de tu cara (selfie)</label><input type="file" id="suSelfie" accept="image/*" capture="user" required></div>'+ 
       '<div class="small muted">Usaremos estas fotos únicamente para la verificación de tu identidad y revisión de la línea de crédito. Elige imágenes claras.</div>'+ 
       '<div class="err" id="suerr" role="alert"></div><button class="btn" data-a="signupSave">Crear cuenta</button>';
@@ -1526,7 +1529,7 @@ function sheetHTML(){
   if(s.type==='profileDocs'){
     const d=identityDocs();
     body='<h2>Verificación de identidad</h2><p class="muted" style="margin:0">Adjunta una foto clara de tu cédula y una foto de tu rostro (selfie). El prestamista las revisará para decidir sobre tu línea de crédito.</p>'+ 
-      '<div class="field"><label class="label" for="docFront">Cédula · parte delantera</label><input type="file" id="docFront" accept="image/*"><div class="small muted">'+(d.front&&!docsRequested()?'Imagen guardada; no es necesario volver a subirla.':'Al tocar, puedes tomar la foto o elegir una imagen guardada.')+'</div></div>'+ 
+      '<div class="field"><label class="label" for="docFront">Cédula · parte delantera</label><input type="file" id="docFront" accept="'+ID_ACCEPT+'"><div class="small muted">'+(d.front&&!docsRequested()?'Imagen guardada; no es necesario volver a subirla.':'Al tocar, puedes tomar la foto o elegir una imagen guardada.')+'</div></div>'+ 
       '<div class="field"><label class="label" for="docSelfie">Foto del rostro (selfie)</label><input type="file" id="docSelfie" accept="image/*" capture="user" '+(d.selfie?'':'required')+'><div class="small muted">'+(d.selfie?'Imagen guardada; no es necesario volver a subirla.':'Obligatorio')+'</div></div>'+ 
       '<div class="err" id="docErr" role="alert">'+esc(ui.err||'')+'</div><div class="row"><button class="btn ghost" data-a="close">Cancelar</button><button class="btn" data-a="identityDocsSave">Enviar documentos</button></div>';
   }
