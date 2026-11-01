@@ -1457,7 +1457,7 @@ function sheetHTML(){
       '<div class="field"><label class="label" for="suFront">Foto de tu cédula (parte delantera)</label><input type="file" id="suFront" accept="image/*" required><div class="small muted">Al tocar, tu teléfono te deja tomar la foto o elegir una imagen guardada.</div></div>'+ 
       '<div class="field"><label class="label" for="suSelfie">Foto de tu cara (selfie)</label><input type="file" id="suSelfie" accept="image/*" capture="user" required></div>'+ 
       '<div class="small muted">Usaremos estas fotos únicamente para la verificación de tu identidad y revisión de la línea de crédito. Elige imágenes claras.</div>'+ 
-      '<div class="err" id="suerr" role="alert"></div><button class="btn" data-a="signupSave">Crear cuenta</button><button class="btn ghost" data-a="authBack">'+svg('back')+' Volver</button>';
+      '<div class="err" id="suerr" role="alert"></div><button class="btn" data-a="signupSave">Crear cuenta</button>';
   }
   if(s.type==='profile'){
     const pr=S.user.profile||{}, pm=S.user.pm||{};
@@ -1603,13 +1603,15 @@ const renderSheet=()=>{
   if(h&&sheetWasOpen)h=h.replace('class="scrim ','class="scrim still ');
   $('#layer').innerHTML=h;sheetWasOpen=!!ui.sheet;hydratePrivateImages($('#layer'));
   document.body.classList[ui.sheet?'add':'remove']('sheet-open');
+  const authScreen=!!ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup'].includes(ui.sheet.type);
+  document.documentElement.dataset.lvl=authScreen?'1':ui.role==='cliente'?String(LEVELS.indexOf(level())+1):'0';
 };
 
 /* ============ render principal ============ */
 function render(){
   ensureLog();
   applyMora();
-  document.documentElement.dataset.lvl=ui.role==='cliente'?String(LEVELS.indexOf(level())+1):'0';
+  document.documentElement.dataset.lvl=ui.sheet&&['authHome','signupEmail','loginEmail','otpVerify','signup'].includes(ui.sheet.type)?'1':ui.role==='cliente'?String(LEVELS.indexOf(level())+1):'0';
   const unread=S.notes.filter(n=>n.to==='cliente'&&!n.read).length+reminders().length;
   let h='<header class="top"><div class="brand"><i class="logo" role="img" aria-label="Logo de Quincena"></i>Quincena</div><div class="top-actions">'+themeBtn()+'<button class="iconbtn" data-a="profile" aria-label="Información personal" title="Información personal">'+svg('user')+'</button><button class="iconbtn" data-a="bell" aria-label="Notificaciones">'+svg('bell')+(unread?'<span class="badge">'+unread+'</span>':'')+'</button></div></header>';
   h+=({inicio:vInicio,prestamos:vPrestamos,calendario:vCalendario,nivel:vNivel})[ui.tab]();
