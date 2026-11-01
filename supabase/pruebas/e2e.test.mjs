@@ -7,6 +7,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 
@@ -17,8 +18,9 @@ create role anon; create role authenticated; create schema extensions;
 create schema auth; create schema storage;
 create table auth.users (id uuid primary key default gen_random_uuid(), email text unique, pass text, encrypted_password text, updated_at timestamptz);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.uid', true),'')::uuid $$;
+create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true),''),'{}')::jsonb $$;
 create table storage.buckets (id text primary key, name text, public boolean, file_size_limit int, allowed_mime_types text[]);
-create table storage.objects (id serial primary key, bucket_id text, name text unique, data text);
+create table storage.objects (id serial primary key, bucket_id text, name text unique, data text, created_at timestamptz default now());
 create function storage.foldername(name text) returns text[] language sql as $$ select (string_to_array(name,'/'))[1:array_length(string_to_array(name,'/'),1)-1] $$;
 grant usage on schema public, storage, auth to authenticated; grant execute on all functions in schema storage, auth to authenticated;
 `);
@@ -27,13 +29,16 @@ await db.exec(`grant select, insert, update, delete on all tables in schema publ
 
 let lock = Promise.resolve();
 const serial = (fn) => { const p = lock.then(fn, fn); lock = p.catch(() => {}); return p; };
-async function as(uid, sql, params) {
-  await db.exec(`reset role; select set_config('request.uid', '${uid || ''}', false); set role authenticated;`);
+async function as(uid, sql, params, claims) {
+  await db.exec('reset role');
+  await db.query(`select set_config('request.uid', $1, false), set_config('request.jwt.claims', $2, false)`, [uid || '', JSON.stringify(claims || {})]);
+  await db.exec('set role authenticated');
   try { return await db.query(sql, params); } finally { await db.exec('reset role'); }
 }
-const ident = (s) => { if (!/^[a-z_]+$/.test(s)) throw new Error('ident ' + s); return s; };
+const ident = (s) => { if (!/^[a-z0-9_]+$/.test(s)) throw new Error('ident ' + s); return s; };
 const colList = (c) => (c === '*' ? '*' : c.split(',').map((x) => ident(x.trim())).join(','));
-const sess = (u) => ({ access_token: u.id, user: { id: u.id, email: u.email } });
+const sess = (u, method = 'password') => ({ access_token: u.id, user: { id: u.id, email: u.email }, session_id: randomUUID(), amr: [{ method, timestamp: 1 }] });
+const otpCodes = new Map();
 const err = (e) => ({ data: null, error: { message: e.message || String(e) } });
 
 async function handle(m) {
@@ -48,17 +53,30 @@ async function handle(m) {
       const u = (await db.query('select id,email from auth.users where email=$1 and (case when encrypted_password is not null then encrypted_password = extensions.crypt($2, encrypted_password) else pass=$2 end)', [m.email.toLowerCase(), m.password])).rows[0];
       return u ? { data: { user: { id: u.id }, session: sess(u) }, error: null } : { data: null, error: { message: 'Invalid login credentials' } };
     }
+    if (m.kind === 'otpSend') {
+      const u = (await db.query('select id from auth.users where email=$1', [m.email.toLowerCase()])).rows[0];
+      if (!u && !m.create) return { data: null, error: { message: 'Signups not allowed for otp' } };
+      const code = String(100000 + Math.floor(Math.random() * 900000)); otpCodes.set(m.email.toLowerCase(), code);
+      return { data: {}, error: null };
+    }
+    if (m.kind === 'otpVerify') {
+      const code = otpCodes.get(m.email.toLowerCase());
+      if (!code || code !== m.token) return { data: null, error: { message: 'Token has expired or is invalid' } };
+      otpCodes.delete(m.email.toLowerCase());
+      const u = (await db.query('select id,email from auth.users where email=$1', [m.email.toLowerCase()])).rows[0];
+      return { data: { user: { id: u.id }, session: sess(u, 'otp') }, error: null };
+    }
     if (m.kind === 'updateUser') { await db.query('update auth.users set pass=$1 where id=$2', [m.password, m.uid]); return { data: {}, error: null }; }
-    if (m.kind === 'upload') { await as(m.uid, 'insert into storage.objects(bucket_id,name,data) values ($1,$2,$3)', [m.bucket, m.path, m.data]); return { data: { path: m.path }, error: null }; }
+    if (m.kind === 'upload') { await as(m.uid, 'insert into storage.objects(bucket_id,name,data) values ($1,$2,$3)', [m.bucket, m.path, m.data], m.claims); return { data: { path: m.path }, error: null }; }
     if (m.kind === 'signed') {
-      const r = await as(m.uid, 'select data from storage.objects where bucket_id=$1 and name=$2', [m.bucket, m.path]);
+      const r = await as(m.uid, 'select data from storage.objects where bucket_id=$1 and name=$2', [m.bucket, m.path], m.claims);
       return r.rows.length ? { data: { signedUrl: r.rows[0].data }, error: null } : { data: null, error: { message: 'Object not found' } };
     }
     if (m.kind === 'rpc') {
       const keys = Object.keys(m.args);
       const vals = keys.map((k) => m.args[k]);
       const sql = `select public.${ident(m.name)}(${keys.map((k, i) => `${ident(k)} => $${i + 1}${Array.isArray(m.args[k]) ? '::uuid[]' : (m.args[k] && typeof m.args[k] === 'object') ? '::jsonb' : ''}`).join(',')}) as r`;
-      const r = await as(m.uid, sql, vals);
+      const r = await as(m.uid, sql, vals, m.claims);
       return { data: r.rows[0].r, error: null };
     }
     if (m.kind === 'query') {
@@ -69,7 +87,7 @@ async function handle(m) {
       if (m.op === 'update') { const sets = Object.entries(m.payload).map(([k, v]) => `${ident(k)} = ${p(v)}`); sql = `update public.${ident(m.t)} set ${sets.join(',')}${where} returning ${colList(m.ret || '*')}`; }
       if (m.op === 'upsert') { const ks = Object.keys(m.payload); sql = `insert into public.${ident(m.t)} (${ks.map(ident).join(',')}) values (${ks.map((k) => p(m.payload[k])).join(',')}) on conflict (${ident(ks[0])}) do update set ${ks.slice(1).map((k) => ident(k) + ' = excluded.' + ident(k)).join(',')} returning ${colList(m.ret || '*')}`; }
       if (m.op === 'insert') { const ks = Object.keys(m.payload); sql = `insert into public.${ident(m.t)} (${ks.map(ident).join(',')}) values (${ks.map((k) => p(m.payload[k])).join(',')}) returning ${colList(m.ret || '*')}`; }
-      const rows = (await as(m.uid, sql, params)).rows;
+      const rows = (await as(m.uid, sql, params, m.claims)).rows;
       if (m.mode === 'single') return rows.length === 1 ? { data: rows[0], error: null } : { data: null, error: { message: 'JSON object requested, multiple (or no) rows returned' } };
       if (m.mode === 'maybe') return { data: rows[0] || null, error: null };
       return { data: rows, error: null };
@@ -147,7 +165,13 @@ await ap.click('#loginForm button[type=submit]');
 await ap.waitForFunction(() => /cuenta de cliente/.test(document.querySelector('#loginErr').textContent));
 await ap.fill('#email', 'jefe@quincena.app'); await ap.fill('#password', 'admin-clave-1');
 await ap.click('#loginForm button[type=submit]');
+await ap.waitForSelector('#otpForm:not(.hidden)');
+assert.equal(await ap.isVisible('#appView'), false, 'sin el código no se abre el panel');
+await ap.fill('#otp', '000000'); await ap.click('#otpForm button[type=submit]');
+await ap.waitForFunction(() => /no es válido/.test(document.querySelector('#otpErr').textContent));
+await ap.fill('#otp', otpCodes.get('jefe@quincena.app')); await ap.click('#otpForm button[type=submit]');
 await ap.waitForSelector('#appView:not(.hidden)');
+console.log('✓ verificación en dos pasos: contraseña + código del correo (un código erróneo se rechaza)');
 await ap.waitForSelector('h1.big');
 assert.match(await ap.textContent('#nav'), /Verificación1/);
 await ap.screenshot({ path: SHOT + 'panel-hoy.png' });

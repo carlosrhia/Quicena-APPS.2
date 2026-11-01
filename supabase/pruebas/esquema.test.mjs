@@ -11,8 +11,9 @@ create role anon; create role authenticated; create schema extensions;
 create schema auth; create schema storage;
 create table auth.users (id uuid primary key default gen_random_uuid(), email text, encrypted_password text, updated_at timestamptz);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.uid', true),'')::uuid $$;
+create function auth.jwt() returns jsonb language sql stable as $$ select coalesce(nullif(current_setting('request.jwt.claims', true),''),'{}')::jsonb $$;
 create table storage.buckets (id text primary key, name text, public boolean, file_size_limit int, allowed_mime_types text[]);
-create table storage.objects (id serial primary key, bucket_id text, name text);
+create table storage.objects (id serial primary key, bucket_id text, name text, created_at timestamptz default now());
 create function storage.foldername(name text) returns text[] language sql as $$ select (string_to_array(name,'/'))[1:array_length(string_to_array(name,'/'),1)-1] $$;
 grant usage on schema public, storage, auth to authenticated; grant execute on all functions in schema storage, auth to authenticated;
 `);
@@ -27,11 +28,29 @@ for (const e of ['admin@x.com', 'cob@x.com', 'v12345678@clientes.quincena.app', 
 const ADMIN = ids['admin@x.com'], COB = ids['cob@x.com'], C1 = ids['v12345678@clientes.quincena.app'], C2 = ids['v7654321@clientes.quincena.app'];
 await db.exec(`insert into public.staff (user_id, email, name, role) select id, lower(email), 'Jefe', 'admin' from auth.users where lower(email)=lower('ADMIN@x.com') on conflict (user_id) do update set role='admin', active=true;`);
 
+var AMR = 'otp', SESSION = null;
 async function as(uid, sql, params) {
-  await db.exec(`reset role; select set_config('request.uid', '${uid || ''}', false); set role authenticated;`);
+  const claims = JSON.stringify({ sub: uid, session_id: SESSION || ('sess-' + uid), amr: [{ method: AMR, timestamp: 1 }] });
+  await db.exec(`reset role; select set_config('request.uid', '${uid || ''}', false); select set_config('request.jwt.claims', '${claims}', false); set role authenticated;`);
   try { return await db.query(sql, params); } finally { await db.exec('reset role'); }
 }
 const fails = async (uid, sql, params, re) => { await assert.rejects(() => as(uid, sql, params), re); };
+// ---------- verificación en dos pasos del administrador ----------
+async function adminTwoSteps() {
+  AMR = 'password'; assert.equal((await as(ADMIN, `select staff_2fa_begin() r`)).rows[0].r.required, true);
+  AMR = 'otp'; assert.equal((await as(ADMIN, `select staff_2fa_complete() r`)).rows[0].r, true);
+}
+AMR = 'password';
+assert.equal((await as(ADMIN, `select is_admin() r`)).rows[0].r, false, 'solo con contraseña no es administrador');
+assert.equal((await as(ADMIN, `select whoami() r`)).rows[0].r.twofa, 'required');
+AMR = 'otp';
+await fails(ADMIN, `select staff_2fa_complete()`, [], /caducó/); // sin el paso de la contraseña
+await adminTwoSteps();
+assert.equal((await as(ADMIN, `select is_admin() r`)).rows[0].r, true, 'tras los dos pasos es administrador');
+SESSION = 'otra-sesion';
+assert.equal((await as(ADMIN, `select is_admin() r`)).rows[0].r, false, 'otra sesión (otro dispositivo) necesita sus dos pasos');
+SESSION = null;
+console.log('OK v3: verificación en dos pasos del administrador');
 
 const state = (extra = {}) => ({ v: 3, shift: 0, config: { mora: 4, rates: { 1: 5, 2: 10, 3: 15 }, methods: [] }, notes: [], log: [], seq: 1,
   user: { name: 'Ana Pérez', fullName: 'Ana Pérez', points: 241, streak: 10, registered: true, profile: { ci: 'V-12345678' }, identityDocs: { front: 'sb:x/front.jpg', selfie: 'sb:x/selfie.jpg' }, creditLineReview: { status: 'approved', limit: 999 } },
@@ -170,4 +189,21 @@ await as(ADMIN, `insert into closings (label, data) values ('15 nov 2026', '{"pr
 await fails(C1, `insert into closings (label, data) values ('x', '{}')`, [], /row-level/);
 assert.equal((await as(C1, `select * from closings`)).rows.length, 0);
 console.log('OK v2: ajustes, bloqueo, nivel, fotos nuevas, notas internas, contraseña y cierres');
+
+// ---------- v3: una solicitud pendiente, contraseñas fuertes y límite de subidas ----------
+cur = (await as(ADMIN, `select state, version from clients where id=$1`, [C1])).rows[0];
+const ub = structuredClone(cur.state); ub.user.accountBlocked = false; ub.user.creditLineReview = { status: 'approved', limit: 50, reviewedAt: '2026-11-01', reason: '' };
+ub.loans = ub.loans.filter((l) => l.status !== 'solicitud');
+await as(ADMIN, `update clients set state=$1 where id=$2`, [ub, C1]);
+const r25 = Number((await as(C1, `select data from app_settings`)).rows[0].data.rates['1']);
+const one = structuredClone(ub); one.loans.push({ id: 50, amount: 10, n: 1, rate: r25, total: Math.round(10 * (1 + r25 / 100) * 100) / 100, status: 'solicitud', installments: [] });
+await as(C1, `update clients set state=$1 where id=$2`, [one, C1]);
+const two = structuredClone(one); two.loans.push({ id: 51, amount: 10, n: 1, rate: r25, total: Math.round(10 * (1 + r25 / 100) * 100) / 100, status: 'solicitud', installments: [] });
+await fails(C1, `update clients set state=$1 where id=$2`, [two, C1], /Ya tienes una solicitud/);
+await fails(ADMIN, `select admin_set_client_password($1, 'solamenteletras')`, [C1], /letras y números/);
+await as(ADMIN, `select admin_set_client_password($1, 'clave1234')`, [C1]);
+for (let k = 0; k < 18; k++) await as(C1, `insert into storage.objects (bucket_id,name) values ('documentos', $1)`, [C1 + '/x' + k + '.jpg']);
+await fails(C1, `insert into storage.objects (bucket_id,name) values ('documentos', $1)`, [C1 + '/x99.jpg'], /row-level/);
+await as(ADMIN, `insert into storage.objects (bucket_id,name) values ('documentos', $1)`, [C1 + '/admin-extra.jpg']);
+console.log('OK v3: una solicitud pendiente, contraseñas con letras y números, máx. 20 fotos al día');
 console.log('OK: todas las comprobaciones del esquema pasaron');

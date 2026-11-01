@@ -413,6 +413,7 @@ body{overscroll-behavior-y:none;min-height:100vh;min-height:100dvh}
 body::before{top:-35vh!important;bottom:-35vh!important;left:0;right:0}
 .profile-sheet,.sheet,.scrim{overscroll-behavior:none}
 /* notificaciones */
+.pw-meter{height:6px;border-radius:4px;background:var(--line);overflow:hidden;margin-top:8px}.pw-meter i{display:block;height:100%;width:0;border-radius:4px;background:var(--bad);transition:width .25s ease,background .25s ease}
 .nt-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .nt-badge{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--accent);color:var(--on-accent)}
 .nt-perm{display:flex;gap:12px;align-items:center;padding:14px;border-radius:18px;border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
@@ -596,7 +597,7 @@ const setPin=h=>{memPin=h;try{localStorage.setItem(PIN_KEY,h)}catch(e){}};
 async function hashPin(p){try{const b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode('quincena:'+p));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,'0')).join('')}catch(e){return 'x'+p}}
 /* Soporte: WhatsApp 0422-0018255 (el número no se muestra en la app). */
 const SUPPORT_WA='https://wa.me/584220018255?text='+encodeURIComponent('Hola, necesito ayuda con mi cuenta de Quincena.');
-const APP_VERSION='3.3';
+const APP_VERSION='3.4';
 /* Foto de la cédula: en Android 13+ Chrome abre el selector de fotos (sin cámara) si el campo acepta solo imágenes.
    Con un tipo adicional, Android muestra su menú clásico con «Cámara» y «Archivos». En iPhone basta con image/*. */
 const ID_ACCEPT=(typeof navigator!=='undefined'&&/Android/i.test(navigator.userAgent||''))?'image/*,android/force-camera-workaround':'image/*';
@@ -1455,7 +1456,7 @@ function sheetHTML(){
       '<div class="field"><label class="label" for="suName">Nombre completo</label><input type="text" id="suName" autocomplete="name" placeholder="Ej. Carlos Andrés Pérez" value="'+esc(pre)+'"></div>'+
       '<div class="field"><label class="label" for="suCI">Cédula de identidad</label><input type="text" id="suCI" inputmode="text" autocomplete="off" placeholder="V-12345678" value="'+esc((S.user.profile||{}).ci||'')+'"></div>'+ 
       '<div class="info"><b>Verificación para la línea de crédito</b><br>Debes adjuntar una foto clara de la parte delantera de tu cédula y una foto de tu rostro (selfie). El prestamista revisará estos documentos para decidir si aprueba tu línea.</div>'+
-      '<div class="field"><label class="label" for="suPass">Contraseña de tu cuenta</label><input type="password" id="suPass" minlength="8" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></div>'+ 
+      '<div class="field"><label class="label" for="suPass">Contraseña de tu cuenta</label><input type="password" id="suPass" minlength="8" autocomplete="new-password" placeholder="Letras y números, mínimo 8"><div class="pw-meter" aria-hidden="true"><i id="pwBar"></i></div><div class="small muted" id="pwHint">Usa al menos 8 caracteres con letras y números.</div></div>'+ 
       '<div class="field"><label class="label" for="suPass2">Repite la contraseña</label><input type="password" id="suPass2" minlength="8" autocomplete="new-password" placeholder="Otra vez"></div>'+ 
       '<div class="field"><label class="label" for="suFront">Foto de tu cédula (parte delantera)</label><input type="file" id="suFront" accept="'+ID_ACCEPT+'" required><div class="small muted">Al tocar, tu teléfono te deja tomar la foto o elegir una imagen guardada.</div></div>'+ 
       '<div class="field"><label class="label" for="suSelfie">Foto de tu cara (selfie)</label><input type="file" id="suSelfie" accept="image/*" capture="user" required></div>'+ 
@@ -1765,7 +1766,7 @@ const A={
   if(words.length<2||words.some(w=>w.length<2)||name.length<5||! /^[\p{L}][\p{L}' .-]*$/u.test(name)){err('Escribe tu nombre completo (nombre y apellido), solo con letras.');return}
   const m=raw.match(/^([VEJGP])?-?(\d{6,9})$/);
   if(!m){err('Revisa la cédula. Ejemplo: V-12345678.');return}
-  if(pass.length<8){err('Elige una contraseña de al menos 8 caracteres.');return}
+  if(pass.length<8||!/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(pass)||!/\d/.test(pass)){err('Elige una contraseña de al menos 8 caracteres, con letras y números.');return}
   if(pass!==pass2){err('Las dos contraseñas no coinciden.');return}
   const files={front:pickedFile('front','#suFront'),selfie:$('#suSelfie')?.files?.[0]};
   if(!files.front||!files.selfie){err('Adjunta la foto de tu cédula y la foto de tu rostro (selfie).');return}
@@ -1845,7 +1846,7 @@ const A={
  open(v,e){const id=+e.dataset.l;ui.open[id]=!ui.open[id];render()},
  amt(v){draft().amount=+v;render()},
  n(v){draft().n=+v;render()},
- request(){if(adminBlocked()){toast('Tu cuenta está bloqueada. Contacta al prestamista.');return}if(S.user.registered&&!creditApproved()){toast('Tu línea de crédito debe ser aprobada por el prestamista primero.');return}draft().method=draft().method||'pm';delete draft().pm;ui.pmFill=null;ui.err='';ui.sheet={type:'request',step:1};renderSheet()},
+ request(){if(S.loans.some(l=>l.status==='solicitud')){toast('Ya tienes una solicitud en revisión. Espera la respuesta del prestamista.');return}if(adminBlocked()){toast('Tu cuenta está bloqueada. Contacta al prestamista.');return}if(S.user.registered&&!creditApproved()){toast('Tu línea de crédito debe ser aprobada por el prestamista primero.');return}draft().method=draft().method||'pm';delete draft().pm;ui.pmFill=null;ui.err='';ui.sheet={type:'request',step:1};renderSheet()},
  pick(v){draft().method=v;renderSheet()},
  rnext(){
   const bank=($('#pmBank').value||'').trim(), phone=($('#pmPhone').value||'').trim(), ci=($('#pmCI').value||'').trim();
@@ -2126,6 +2127,14 @@ function finishNavDrag(e){
 document.addEventListener('pointerup',finishNavDrag,{passive:false});
 document.addEventListener('pointercancel',finishNavDrag,{passive:true});
 document.addEventListener('click',e=>{if(suppressNavClick){suppressNavClick=false;clearTimeout(navSuppressTimer);if(e.cancelable)e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();}},true);
+/* Indicador de seguridad de la contraseña al crear la cuenta. */
+document.addEventListener('input',e=>{
+  if(!e.target||e.target.id!=='suPass')return;
+  const v=e.target.value||'',bar=document.getElementById('pwBar'),hint=document.getElementById('pwHint');if(!bar||!hint)return;
+  let sc=0;if(v.length>=8)sc++;if(/[A-Za-zÁÉÍÓÚáéíóúÑñ]/.test(v)&&/\d/.test(v))sc++;if(v.length>=12)sc++;if(/[^A-Za-z0-9]/.test(v)||(/[a-z]/.test(v)&&/[A-Z]/.test(v)))sc++;
+  const lv=[['0%','var(--bad)','Usa al menos 8 caracteres con letras y números.'],['30%','var(--bad)','Débil: añade letras y números.'],['60%','#E0A100','Aceptable.'],['80%','var(--ok)','Buena.'],['100%','var(--ok)','Muy segura.']][v?Math.max(1,sc):0];
+  bar.style.width=lv[0];bar.style.background=lv[1];hint.textContent=lv[2];
+});
 document.addEventListener('change',e=>{
   if(!e.target||e.target.id!=='importFile')return;
   const f=e.target.files&&e.target.files[0];e.target.value='';
