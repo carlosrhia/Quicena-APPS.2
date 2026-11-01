@@ -108,7 +108,11 @@ Las variables de entorno solo se aplican en despliegues nuevos.
 ## Actualizar a la versión 3 (seguridad: código por correo, contraseñas fuertes y límites)
 
 1. **Une el pull request** en GitHub. Vercel publica el panel nuevo.
-2. **Plantilla del correo con el código.** En Supabase ve a **Authentication → Emails → Templates → Magic Link**
+2. **Dirección de la web (obligatorio para el enlace del correo).** En Supabase ve a **Authentication → URL Configuration**
+   (*Configuración de URL*): en **Site URL** escribe `https://quicena-web.vercel.app` y en **Redirect URLs** añade
+   `https://quicena-web.vercel.app/**`. Guarda. Así el botón «Sign in» del correo abre tu panel ya verificado.
+   *(Sin SMTP propio Supabase no deja editar la plantilla: el correo llega en inglés con el botón «Sign in»; funciona igual.)*
+3. **Opcional, plantilla con código** (solo si configuras SMTP propio). En Supabase ve a **Authentication → Emails → Templates → Magic Link**
    (en algunas versiones: *Email Templates*). Cambia el asunto a `Tu código de Quincena` y el contenido por:
 
    ```html
@@ -119,10 +123,10 @@ Las variables de entorno solo se aplican en despliegues nuevos.
    ```
 
    Pulsa **Save**.
-3. **Ejecuta otra vez `supabase/schema.sql`** completo en **SQL Editor → Run**. No borra datos.
-4. **Contraseñas** (recomendado): **Authentication → Sign In / Providers → Email**:
+4. **Ejecuta otra vez `supabase/schema.sql`** completo en **SQL Editor → Run**. No borra datos.
+5. **Contraseñas** (recomendado): **Authentication → Sign In / Providers → Email**:
    *Minimum password length* = **8** y *Password requirements* = **letras y números** (*Letters and digits*). **Save**.
-5. Entra al panel: tras la contraseña te pedirá el **código de 6 dígitos** que llega a tu correo.
+6. Entra al panel: tras la contraseña te llegará un correo; pulsa **«Sign in»** (o escribe el código si lo trae).
 
 **Importante sobre el correo:** el servidor de correo que trae Supabase gratis envía **pocos correos por hora** y solo a
 direcciones que sean miembros del equipo del proyecto (la cuenta con la que creaste Supabase lo es). Si tu correo de

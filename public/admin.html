@@ -133,8 +133,9 @@ td{padding:10px 14px;border-top:1px solid var(--line);vertical-align:middle}
     <span class="muted">Entran el administrador y los cobradores con el correo y la contraseña de su cuenta en Supabase. Por seguridad, después se pide un código enviado a tu correo.</span>
   </form>
   <form id="otpForm" class="login glass hidden" autocomplete="off">
-    <div class="brand" style="flex:none"><div class="logo" aria-hidden="true">15</div><div><b>Verificación en dos pasos</b><span class="muted" id="otpTo">Te enviamos un código a tu correo.</span></div></div>
-    <label class="field">Código del correo<input id="otp" class="input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="10" placeholder="123456" style="font-size:24px;letter-spacing:.3em;text-align:center"></label>
+    <div class="brand" style="flex:none"><div class="logo" aria-hidden="true">15</div><div><b>Verificación en dos pasos</b><span class="muted" id="otpTo">Te enviamos un correo.</span></div></div>
+    <div class="lvBox" style="flex-direction:column;gap:4px"><b>Abre el correo de Supabase y pulsa «Sign in».</b><span class="muted">Se abrirá el panel ya verificado (puedes cerrar esta pestaña). Si el correo trae un código de 6 dígitos, escríbelo aquí abajo.</span></div>
+    <label class="field">Código del correo (si lo trae)<input id="otp" class="input" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]*" maxlength="10" placeholder="123456" style="font-size:24px;letter-spacing:.3em;text-align:center"></label>
     <div id="otpErr" class="err" role="alert"></div>
     <button class="btn" type="submit">Verificar y entrar</button>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn s" type="button" id="otpResend" style="flex:1">Reenviar código</button><button class="btn s" type="button" id="otpCancel" style="flex:1">Cancelar</button></div>
@@ -169,7 +170,10 @@ const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const CFG=window.QUINCENA_CONFIG||{},BUCKET='documentos';
 let sb=null;
-try{if(CFG.url&&CFG.anonKey&&window.supabase)sb=supabase.createClient(CFG.url,CFG.anonKey,{auth:{persistSession:true,autoRefreshToken:true,storageKey:'quincena.admin.auth'}})}catch(_){sb=null}
+/* ¿Se llegó desde el enlace «Sign in» del correo (segundo paso)? Se mira antes de que Supabase limpie la dirección. */
+const FROM_EMAIL_LINK=/access_token=|type=magiclink|[?&]code=/.test(location.hash+location.search);
+const LINK_ERROR=(()=>{const m=(location.hash+location.search).match(/error_description=([^&]+)/);try{return m?decodeURIComponent(m[1].replace(/\+/g,' ')):''}catch(_){return ''}})();
+try{if(CFG.url&&CFG.anonKey&&window.supabase)sb=supabase.createClient(CFG.url,CFG.anonKey,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true,flowType:'implicit',storageKey:'quincena.admin.auth'}})}catch(_){sb=null}
 function errText(e,fb){const m=String(e?.message||e?.error_description||'');if(/Invalid login credentials/i.test(m))return 'Correo o contraseña incorrectos.';if(/Email not confirmed/i.test(m))return 'Esta cuenta no está confirmada. Confírmala en Supabase → Authentication → Users.';if(/Failed to fetch|NetworkError|Load failed/i.test(m))return 'No se pudo conectar con Supabase. Revisa tu internet.';if(/JWT/i.test(m)){logout(false);return 'La sesión expiró. Inicia sesión de nuevo.'}return m||fb||'No se pudo completar la acción.'}
 async function q(p,fb){const {data,error}=await p;if(error)throw new Error(errText(error,fb));return data}
 let toastT=null;function toast(t){const e=$('#toast');e.textContent=t;e.classList.remove('hidden');clearTimeout(toastT);toastT=setTimeout(()=>e.classList.add('hidden'),3800)}
@@ -524,9 +528,9 @@ async function enterPanel(){
 /* Verificación en dos pasos: contraseña + código de un solo uso enviado al correo (Supabase lo envía). */
 let otpEmail='',otpTimer=null;
 const maskMail=m=>{const [u,d]=String(m).split('@');return (u||'').slice(0,2)+'•••@'+(d||'')};
-function showOtp(on){$('#loginForm').classList.toggle('hidden',on);$('#otpForm').classList.toggle('hidden',!on);if(on){$('#otp').value='';$('#otpErr').textContent='';$('#otpTo').textContent='Te enviamos un código a '+maskMail(otpEmail)+'.';setTimeout(()=>$('#otp').focus(),50)}}
+function showOtp(on){$('#loginForm').classList.toggle('hidden',on);$('#otpForm').classList.toggle('hidden',!on);if(on){$('#otp').value='';$('#otpErr').textContent='';$('#otpTo').textContent='Te enviamos un correo a '+maskMail(otpEmail)+'.';setTimeout(()=>$('#otp').focus(),50)}}
 async function sendCode(){
-  const {error}=await sb.auth.signInWithOtp({email:otpEmail,options:{shouldCreateUser:false}});
+  const {error}=await sb.auth.signInWithOtp({email:otpEmail,options:{shouldCreateUser:false,emailRedirectTo:location.origin+location.pathname}});
   if(error)throw new Error(/rate|seconds|too many/i.test(error.message)?'Espera un momento antes de pedir otro código.':errText(error,'No se pudo enviar el código.'));
   const btn=$('#otpResend');let t=60;btn.disabled=true;clearInterval(otpTimer);btn.textContent='Reenviar código ('+t+')';otpTimer=setInterval(()=>{t--;btn.textContent=t>0?'Reenviar código ('+t+')':'Reenviar código';if(t<=0){clearInterval(otpTimer);btn.disabled=false}},1000);
 }
@@ -539,7 +543,16 @@ $('#otpResend').addEventListener('click',()=>sendCode().then(()=>toast('Código 
 $('#otpCancel').addEventListener('click',()=>{clearInterval(otpTimer);sb.auth.signOut().catch(()=>{});showOtp(false)});
 function logout(show){clearInterval(autoTimer);if(sb)sb.auth.signOut().catch(()=>{});me=null;clients=[];notes={};staff=[];auditRows=[];ui.sel=null;ui.q='';ui.section='hoy';$('#appView').classList.add('hidden');$('#loginView').classList.remove('hidden');$('#main').innerHTML='';if(show)toast('Sesión cerrada.')}
 if(!sb){const w=$('#configWarn');w.innerHTML='<b>Falta conectar Supabase.</b> En Vercel → Settings → Environment Variables añade <span class="mono">SUPABASE_URL</span> y <span class="mono">SUPABASE_ANON_KEY</span> y vuelve a desplegar.';w.classList.remove('hidden')}
-else sb.auth.getSession().then(({data})=>{if(data?.session)return enterPanel()}).catch(e=>{$('#loginErr').textContent=e.message});
+else sb.auth.getSession().then(async({data})=>{
+  if(LINK_ERROR){$('#loginErr').textContent=/expired|invalid/i.test(LINK_ERROR)?'El enlace del correo caducó o ya se usó. Vuelve a entrar con tu contraseña.':LINK_ERROR;history.replaceState(null,'',location.pathname);return}
+  if(!data?.session)return;
+  if(FROM_EMAIL_LINK){
+    history.replaceState(null,'',location.pathname);
+    try{await q(sb.rpc('staff_2fa_complete'),'No se pudo completar la verificación.')}catch(e){if(!/no es necesari|staff_2fa_complete|PGRST202/i.test(e.message)){await sb.auth.signOut();$('#loginErr').textContent=e.message;return}}
+  }
+  await enterPanel();
+  if(FROM_EMAIL_LINK)toast(me?.role==='admin'?'Verificado. Bienvenido, Señor.':'Verificado. Sesión iniciada.');
+}).catch(e=>{$('#loginErr').textContent=e.message});
 </script>
 </body>
 </html>
