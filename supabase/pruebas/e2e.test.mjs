@@ -113,7 +113,11 @@ await cp.fill('#suName', 'Ana María Pérez');
 await cp.fill('#suCI', 'V-12345678');
 await cp.fill('#suPass', 'clave-segura-1');
 await cp.fill('#suPass2', 'clave-segura-1');
+assert.equal(await cp.locator('#suBack').count(), 0, 'ya no se pide el reverso de la cédula');
+assert.equal(await cp.locator('#suFrontCam[capture]').count(), 1, 'opción «Tomar foto»');
+assert.equal(await cp.locator('#suFront:not([capture])').count(), 1, 'opción «Elegir archivo»');
 await cp.setInputFiles('#suFront', png);
+await cp.waitForFunction(() => /Foto lista/.test(document.querySelector('#pick-front').textContent));
 await cp.setInputFiles('#suSelfie', png);
 await cp.click('[data-a=signupSave]');
 await cp.waitForFunction(() => document.querySelector('#toast') && /Cuenta creada/.test(document.querySelector('#toast').textContent), null, { timeout: 15000 });
@@ -279,6 +283,18 @@ await kp.waitForSelector('h1.big');
 assert.equal(await kp.locator('[data-go=ajustes]').count(), 0, 'el cobrador no ve Ajustes');
 await kp.screenshot({ path: SHOT + 'panel-movil.png' });
 console.log('✓ calendario, mensajes, reportes, cierre de quincena, modo claro, equipo, auditoría y cobrador (móvil)');
+
+// ---------- 8b. soporte, color del nivel 1 y notificaciones ----------
+await cctx.grantPermissions(['notifications'], { origin: BASE });
+await cp.evaluate(() => { A.profile(); });
+assert.match(await cp.getAttribute('a.profile-support-row', 'href'), /wa\.me\/584220018255/);
+assert.doesNotMatch(await cp.textContent('.profile-page'), /0422|0018255|8411730/, 'el número no se muestra');
+await cp.evaluate(() => { A.profileClose(); A.bell(); });
+await cp.waitForSelector('.nt-perm');
+assert.match(await cp.textContent('.sheet'), /Notificaciones activadas|Notificaciones bloqueadas|Activa las notificaciones/); assert.match(await cp.textContent('.sheet'), /Hoy/); await cp.screenshot({ path: SHOT + 'cliente-notificaciones.png' });
+await cp.evaluate(() => A.close());
+assert.equal(await cp.evaluate(() => getComputedStyle(document.documentElement).overscrollBehaviorY), 'none');
+console.log('✓ soporte por WhatsApp sin número visible, notificaciones activables y sin rebote al deslizar');
 
 // ---------- 9. el cliente entra con la contraseña nueva ----------
 const cp2 = await cctx.newPage(); watch(cp2, 'cliente2');
