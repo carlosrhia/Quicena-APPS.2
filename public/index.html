@@ -412,13 +412,6 @@ html{-webkit-text-size-adjust:100%;background-color:var(--bg);overscroll-behavio
 body{overscroll-behavior-y:none;min-height:100vh;min-height:100dvh}
 body::before{top:-35vh!important;bottom:-35vh!important;left:0;right:0}
 .profile-sheet,.sheet,.scrim{overscroll-behavior:none}
-/* selector de foto: tomar foto o elegir archivo */
-.pick-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.pick{position:relative;overflow:hidden;display:flex;align-items:center;justify-content:center;gap:6px;min-height:46px;border-radius:14px;border:1px solid var(--line);background:var(--surface);color:var(--ink);font-weight:600;font-size:14px;cursor:pointer}
-.pick input{position:absolute;inset:0;opacity:0;cursor:pointer}
-.pick-prev{display:flex;align-items:center;gap:10px;font-size:13px;color:var(--muted)}
-.pick-prev img{width:56px;height:40px;object-fit:cover;border-radius:8px;border:1px solid var(--line)}
-.pick-prev.ok{color:var(--ok);font-weight:600}
 /* notificaciones */
 .nt-head{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .nt-badge{font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;background:var(--accent);color:var(--on-accent)}
@@ -978,15 +971,7 @@ function proofThumb(l,i){
   if(!i.proofData)return '<div class="info">Este pago llegó sin comprobante adjunto.</div>';
   return '<button class="proof" data-a="viewProof" data-l="'+l.id+'" data-n="'+i.n+'" aria-label="Ver comprobante adjunto"><img loading="lazy" decoding="async" src="'+esc(safeSrc(i.proofData))+'" alt="Vista previa del comprobante"><span><b>Ver comprobante</b><br><span class="small muted">Toca para ampliar</span></span></button>';
 }
-/* Selector de foto: el cliente elige entre tomar la foto con la cámara o adjuntar una imagen guardada. */
-function photoPicker(id,key,label,hint){
-  const f=ui.pick&&ui.pick[key];
-  return '<div class="field"><span class="label">'+esc(label)+'</span><div class="pick-row">'+
-    '<label class="pick">📷 Tomar foto<input type="file" id="'+id+'Cam" accept="image/*" capture="environment" data-pick="'+key+'" aria-label="'+esc(label)+': tomar foto"></label>'+
-    '<label class="pick">🖼️ Elegir archivo<input type="file" id="'+id+'" accept="image/*" data-pick="'+key+'" aria-label="'+esc(label)+': elegir archivo"></label></div>'+
-    '<div class="pick-prev'+(f?' ok':'')+'" id="pick-'+key+'">'+(f?'✓ '+esc(f.name||'Foto lista'):esc(hint||'Ninguna foto seleccionada todavía'))+'</div></div>';
-}
-function pickedFile(key,sel){return (ui.pick&&ui.pick[key])||($(sel)&&$(sel).files&&$(sel).files[0])||null}
+function pickedFile(key,sel){return ($(sel)&&$(sel).files&&$(sel).files[0])||null}
 function shrink(file){return new Promise((res,rej)=>{
   const r=new FileReader();r.onerror=rej;
   r.onload=()=>{const im=new Image();im.onerror=rej;
@@ -1463,16 +1448,16 @@ function sheetHTML(){
   }
   if(s.type==='signup'){
     const nm=String(S.user.name||'').trim(), pre=nm.includes(' ')?nm:'';
-    body='<div class="logo-hero" role="img" aria-label="Quincena"></div><h2 style="text-align:center">Completa tu cuenta</h2><p class="muted" style="margin:0;text-align:center">Completa tus datos tal como aparecen en tu documento y elige la contraseña de tu cuenta.</p><div class="auth-note">Con tu cédula y esta contraseña podrás entrar desde cualquier teléfono o navegador.</div>'+
+    body='<button class="profile-edit-back" data-a="authBack">'+svg('back')+' Volver</button><div class="logo-hero" role="img" aria-label="Quincena"></div><h2 style="text-align:center">Completa tu cuenta</h2><p class="muted" style="margin:0;text-align:center">Completa tus datos tal como aparecen en tu documento y elige la contraseña de tu cuenta.</p><div class="auth-note">Con tu cédula y esta contraseña podrás entrar desde cualquier teléfono o navegador.</div>'+
       '<div class="field"><label class="label" for="suName">Nombre completo</label><input type="text" id="suName" autocomplete="name" placeholder="Ej. Carlos Andrés Pérez" value="'+esc(pre)+'"></div>'+
       '<div class="field"><label class="label" for="suCI">Cédula de identidad</label><input type="text" id="suCI" inputmode="text" autocomplete="off" placeholder="V-12345678" value="'+esc((S.user.profile||{}).ci||'')+'"></div>'+ 
       '<div class="info"><b>Verificación para la línea de crédito</b><br>Debes adjuntar una foto clara de la parte delantera de tu cédula y una foto de tu rostro (selfie). El prestamista revisará estos documentos para decidir si aprueba tu línea.</div>'+
       '<div class="field"><label class="label" for="suPass">Contraseña de tu cuenta</label><input type="password" id="suPass" minlength="8" autocomplete="new-password" placeholder="Mínimo 8 caracteres"></div>'+ 
       '<div class="field"><label class="label" for="suPass2">Repite la contraseña</label><input type="password" id="suPass2" minlength="8" autocomplete="new-password" placeholder="Otra vez"></div>'+ 
-      photoPicker('suFront','front','Foto de tu cédula (parte delantera)')+ 
+      '<div class="field"><label class="label" for="suFront">Foto de tu cédula (parte delantera)</label><input type="file" id="suFront" accept="image/*" required><div class="small muted">Al tocar, tu teléfono te deja tomar la foto o elegir una imagen guardada.</div></div>'+ 
       '<div class="field"><label class="label" for="suSelfie">Foto de tu cara (selfie)</label><input type="file" id="suSelfie" accept="image/*" capture="user" required></div>'+ 
       '<div class="small muted">Usaremos estas fotos únicamente para la verificación de tu identidad y revisión de la línea de crédito. Elige imágenes claras.</div>'+ 
-      '<div class="err" id="suerr" role="alert"></div><button class="btn" data-a="signupSave">Crear cuenta</button>';
+      '<div class="err" id="suerr" role="alert"></div><button class="btn" data-a="signupSave">Crear cuenta</button><button class="btn ghost" data-a="authBack">'+svg('back')+' Volver</button>';
   }
   if(s.type==='profile'){
     const pr=S.user.profile||{}, pm=S.user.pm||{};
@@ -1541,7 +1526,7 @@ function sheetHTML(){
   if(s.type==='profileDocs'){
     const d=identityDocs();
     body='<h2>Verificación de identidad</h2><p class="muted" style="margin:0">Adjunta una foto clara de tu cédula y una foto de tu rostro (selfie). El prestamista las revisará para decidir sobre tu línea de crédito.</p>'+ 
-      photoPicker('docFront','front','Cédula · parte delantera',d.front&&!docsRequested()?'Imagen guardada; no es necesario volver a subirla.':'')+ 
+      '<div class="field"><label class="label" for="docFront">Cédula · parte delantera</label><input type="file" id="docFront" accept="image/*"><div class="small muted">'+(d.front&&!docsRequested()?'Imagen guardada; no es necesario volver a subirla.':'Al tocar, puedes tomar la foto o elegir una imagen guardada.')+'</div></div>'+ 
       '<div class="field"><label class="label" for="docSelfie">Foto del rostro (selfie)</label><input type="file" id="docSelfie" accept="image/*" capture="user" '+(d.selfie?'':'required')+'><div class="small muted">'+(d.selfie?'Imagen guardada; no es necesario volver a subirla.':'Obligatorio')+'</div></div>'+ 
       '<div class="err" id="docErr" role="alert">'+esc(ui.err||'')+'</div><div class="row"><button class="btn ghost" data-a="close">Cancelar</button><button class="btn" data-a="identityDocsSave">Enviar documentos</button></div>';
   }
@@ -1655,7 +1640,7 @@ const go=()=>{save();render();renderSheet()};
 
 /* ============ acciones ============ */
 const A={
- authCreate(){ui.pick={};ui.err='';ui.emailDraft='';ui.emailAuth=null;ui.sheet={type:'signup'};renderSheet()},
+ authCreate(){ui.err='';ui.emailDraft='';ui.emailAuth=null;ui.sheet={type:'signup'};renderSheet()},
  async clientLogin(){
   const ci=normalizeCI($('#clCI')&&$('#clCI').value),pass=($('#clPass')&&$('#clPass').value)||'',fail=m=>{ui.err=m;const e=$('#clErr');if(e)e.textContent=m};
   if(!/^[VEJGP]?\d{6,9}$/.test(ci)){fail('Escribe una cédula válida. Ejemplo: V-12345678.');return}
@@ -1820,7 +1805,7 @@ const A={
   notify('prestamista','El cliente '+(S.user.fullName||S.user.name)+' envió o actualizó sus documentos. Revisa su línea de crédito.');
   save();ui.sheet={type:'profile'};render();renderSheet();toast('Documentos enviados para revisión');
  },
- profileDocs(){ui.pick={};if(identityDocsReady()){toast('Ya enviaste tus documentos. Si necesitas actualizarlos, contacta al prestamista.');return}ui.err='';ui.sheet={type:'profileDocs'};renderSheet()},
+ profileDocs(){if(identityDocsReady()){toast('Ya enviaste tus documentos. Si necesitas actualizarlos, contacta al prestamista.');return}ui.err='';ui.sheet={type:'profileDocs'};renderSheet()},
  viewIdentityDoc(v){ui.sheet={type:'identityDoc',doc:v};renderSheet()},
  creditApprove(){
   if(!isLender()){toast('Solo el prestamista puede aprobar una línea.');return}
@@ -2137,15 +2122,6 @@ document.addEventListener('pointerup',finishNavDrag,{passive:false});
 document.addEventListener('pointercancel',finishNavDrag,{passive:true});
 document.addEventListener('click',e=>{if(suppressNavClick){suppressNavClick=false;clearTimeout(navSuppressTimer);if(e.cancelable)e.preventDefault();e.stopPropagation();e.stopImmediatePropagation();}},true);
 document.addEventListener('change',e=>{
-  if(e.target&&e.target.dataset&&e.target.dataset.pick){
-    const k=e.target.dataset.pick,f=e.target.files&&e.target.files[0];if(!f)return;
-    ui.pick=ui.pick||{};ui.pick[k]=f;
-    const box=document.getElementById('pick-'+k);
-    if(box){box.className='pick-prev ok';box.textContent='';let url='';try{url=URL.createObjectURL(f)}catch(_){}
-      if(url){const im=document.createElement('img');im.src=url;im.alt='Vista previa';box.appendChild(im)}
-      box.appendChild(document.createTextNode('✓ Foto lista'))}
-    return;
-  }
   if(!e.target||e.target.id!=='importFile')return;
   const f=e.target.files&&e.target.files[0];e.target.value='';
   if(!f||!isLender())return;
