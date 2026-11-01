@@ -387,7 +387,7 @@ test('cuenta: exige nombre completo, cédula, foto de la cédula y foto del rost
   x.A.authCreate();
   assert.equal(x.ui.sheet.type, 'signup', 'el registro empieza directamente en los datos personales');
   assert.match(x.fn.sheetHTML(), /Nombre completo/); assert.match(x.fn.sheetHTML(), /Cédula de identidad/);
-  assert.match(x.fn.sheetHTML(), /suFront/); assert.doesNotMatch(x.fn.sheetHTML(), /suBack/, 'ya no se pide el reverso'); assert.match(x.fn.sheetHTML(), /suFrontCam/, 'tomar foto'); assert.match(x.fn.sheetHTML(), /Elegir archivo/); assert.match(x.fn.sheetHTML(), /suSelfie/);
+  assert.match(x.fn.sheetHTML(), /suFront/); assert.doesNotMatch(x.fn.sheetHTML(), /suBack/, 'ya no se pide el reverso'); assert.doesNotMatch(x.fn.sheetHTML(), /id="suFront"[^>]*capture/, 'la cédula deja elegir cámara o archivo'); assert.match(x.fn.sheetHTML(), /data-a="authBack"/, 'botón Volver'); assert.match(x.fn.sheetHTML(), /suSelfie/);
   x.A.close(); assert.equal(x.ui.sheet.type, 'signup', 'la hoja de registro no se puede cerrar sin completarla');
   const go = async (name, ci, withDocs = false, pass = 'clave-larga-1') => { setInput(app, '#suName', { value: name }); setInput(app, '#suCI', { value: ci }); setInput(app, '#suPass', { value: pass }); setInput(app, '#suPass2', { value: pass }); if(withDocs) for(const id of ['#suFront','#suSelfie']) setInput(app,id,{files:[{type:'image/png',name:id.slice(1)+'.png',size:100}]}); await x.A.signupSave(); };
   await go('Carlos', 'V-12345678'); assert.match(app.ctx.document.querySelector('#suerr').textContent, /nombre completo/i);
