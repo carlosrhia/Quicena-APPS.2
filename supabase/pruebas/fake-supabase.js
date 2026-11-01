@@ -6,6 +6,7 @@
     select(cols) { if (this.op === 'select') this.cols = cols || '*'; else this.ret = cols || '*'; return this; }
     insert(v) { this.op = 'insert'; this.payload = v; return this; }
     update(v) { this.op = 'update'; this.payload = v; return this; }
+    upsert(v) { this.op = 'upsert'; this.payload = v; return this; }
     eq(c, v) { this.f.push([c, '=', v]); return this; }
     gt(c, v) { this.f.push([c, '>', v]); return this; }
     order(c, o) { this.ord.push([c, o && o.ascending === false ? 'desc' : 'asc']); return this; }

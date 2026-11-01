@@ -1,5 +1,7 @@
 // Prueba de extremo a extremo: Chromium real + app + panel + esquema SQL real (PGlite) tras un Supabase simulado.
 import { PGlite } from '@electric-sql/pglite';
+import { createRequire as __cr } from 'node:module';
+const __pgcrypto = { name: 'pgcrypto', setup: async () => ({ bundlePath: new URL('file://' + __cr(import.meta.url).resolve('@electric-sql/pglite').replace(/dist\/.*$/, 'dist/pgcrypto.tar.gz')) }) };
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -9,11 +11,11 @@ const require = createRequire(import.meta.url);
 const { chromium } = require('playwright');
 
 const ROOT = new URL('../../', import.meta.url).pathname.replace(/\/$/, '');
-const db = new PGlite();
+const db = new PGlite({ extensions: { pgcrypto: __pgcrypto } });
 await db.exec(`
-create role anon; create role authenticated;
+create role anon; create role authenticated; create schema extensions;
 create schema auth; create schema storage;
-create table auth.users (id uuid primary key default gen_random_uuid(), email text unique, pass text);
+create table auth.users (id uuid primary key default gen_random_uuid(), email text unique, pass text, encrypted_password text, updated_at timestamptz);
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.uid', true),'')::uuid $$;
 create table storage.buckets (id text primary key, name text, public boolean, file_size_limit int, allowed_mime_types text[]);
 create table storage.objects (id serial primary key, bucket_id text, name text unique, data text);
@@ -43,7 +45,7 @@ async function handle(m) {
       return { data: { user: { id: u.id }, session: sess(u) }, error: null };
     }
     if (m.kind === 'signIn') {
-      const u = (await db.query('select id,email from auth.users where email=$1 and pass=$2', [m.email.toLowerCase(), m.password])).rows[0];
+      const u = (await db.query('select id,email from auth.users where email=$1 and (case when encrypted_password is not null then encrypted_password = extensions.crypt($2, encrypted_password) else pass=$2 end)', [m.email.toLowerCase(), m.password])).rows[0];
       return u ? { data: { user: { id: u.id }, session: sess(u) }, error: null } : { data: null, error: { message: 'Invalid login credentials' } };
     }
     if (m.kind === 'updateUser') { await db.query('update auth.users set pass=$1 where id=$2', [m.password, m.uid]); return { data: {}, error: null }; }
@@ -55,7 +57,7 @@ async function handle(m) {
     if (m.kind === 'rpc') {
       const keys = Object.keys(m.args);
       const vals = keys.map((k) => m.args[k]);
-      const sql = `select public.${ident(m.name)}(${keys.map((k, i) => `${ident(k)} => $${i + 1}${Array.isArray(m.args[k]) ? '::uuid[]' : ''}`).join(',')}) as r`;
+      const sql = `select public.${ident(m.name)}(${keys.map((k, i) => `${ident(k)} => $${i + 1}${Array.isArray(m.args[k]) ? '::uuid[]' : (m.args[k] && typeof m.args[k] === 'object') ? '::jsonb' : ''}`).join(',')}) as r`;
       const r = await as(m.uid, sql, vals);
       return { data: r.rows[0].r, error: null };
     }
@@ -65,6 +67,7 @@ async function handle(m) {
       let sql;
       if (m.op === 'select') sql = `select ${colList(m.cols)} from public.${ident(m.t)}${where}${m.ord.length ? ' order by ' + m.ord.map(([c, d]) => ident(c) + ' ' + d).join(',') : ''}${m.lim ? ' limit ' + Number(m.lim) : ''}`;
       if (m.op === 'update') { const sets = Object.entries(m.payload).map(([k, v]) => `${ident(k)} = ${p(v)}`); sql = `update public.${ident(m.t)} set ${sets.join(',')}${where} returning ${colList(m.ret || '*')}`; }
+      if (m.op === 'upsert') { const ks = Object.keys(m.payload); sql = `insert into public.${ident(m.t)} (${ks.map(ident).join(',')}) values (${ks.map((k) => p(m.payload[k])).join(',')}) on conflict (${ident(ks[0])}) do update set ${ks.slice(1).map((k) => ident(k) + ' = excluded.' + ident(k)).join(',')} returning ${colList(m.ret || '*')}`; }
       if (m.op === 'insert') { const ks = Object.keys(m.payload); sql = `insert into public.${ident(m.t)} (${ks.map(ident).join(',')}) values (${ks.map((k) => p(m.payload[k])).join(',')}) returning ${colList(m.ret || '*')}`; }
       const rows = (await as(m.uid, sql, params)).rows;
       if (m.mode === 'single') return rows.length === 1 ? { data: rows[0], error: null } : { data: null, error: { message: 'JSON object requested, multiple (or no) rows returned' } };
@@ -95,7 +98,7 @@ const newCtx = async (vp) => {
   return ctx;
 };
 const pageErrors = [];
-const watch = (pg, name) => { pg.on('pageerror', (e) => pageErrors.push(name + ': ' + e.message)); pg.on('dialog', (d) => d.accept(d.type() === 'prompt' ? 'Documentos ilegibles' : undefined)); };
+const watch = (pg, name) => { pg.on('pageerror', (e) => pageErrors.push(name + ': ' + e.message)); pg.on('dialog', (d) => d.accept(d.type() === 'prompt' ? (globalThis.__answer ?? 'Documentos ilegibles') : undefined)); };
 const png = { name: 'foto.png', mimeType: 'image/png', buffer: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64') };
 const SHOT = new URL('./', import.meta.url).pathname; // capturas: admin-expediente.png y cliente-prestamo.png
 
@@ -123,123 +126,170 @@ assert.equal((await db.query(`select email from auth.users`)).rows[0].email, 'v1
 console.log('✓ registro del cliente: cuenta, 2 fotos privadas y expediente con línea pendiente');
 
 // ---------- 2. el administrador entra al panel ----------
-const admin = (await db.query(`insert into auth.users(email,pass) values ('jefe@quincena.app','admin-clave-1') returning id`)).rows[0].id;
+await db.query(`insert into auth.users(email,pass) values ('jefe@quincena.app','admin-clave-1')`);
 await db.query(`insert into public.staff (user_id, email, name, role) select id, lower(email), 'Carlos Jefe', 'admin' from auth.users where lower(email) = lower('JEFE@quincena.app') on conflict (user_id) do update set role = 'admin', active = true`);
 const actx = await newCtx({ width: 1300, height: 900 });
 const ap = await actx.newPage(); watch(ap, 'admin');
+const toastIs = (pg, re) => pg.waitForFunction((src) => new RegExp(src).test(document.querySelector('#toast').textContent), re.source, { timeout: 15000 });
 await ap.goto(BASE + '/admin.html');
 await ap.fill('#email', 'jefe@quincena.app'); await ap.fill('#password', 'mala-clave');
 await ap.click('#loginForm button[type=submit]');
 await ap.waitForFunction(() => /incorrectos/.test(document.querySelector('#loginErr').textContent));
-// el cliente no puede entrar al panel
 await ap.fill('#email', 'v12345678@clientes.quincena.app'); await ap.fill('#password', 'clave-segura-1');
 await ap.click('#loginForm button[type=submit]');
 await ap.waitForFunction(() => /cuenta de cliente/.test(document.querySelector('#loginErr').textContent));
 await ap.fill('#email', 'jefe@quincena.app'); await ap.fill('#password', 'admin-clave-1');
 await ap.click('#loginForm button[type=submit]');
-await ap.waitForSelector('#adminView:not(.hidden)');
-await ap.waitForSelector('[data-client]');
-assert.match(await ap.textContent('#clientList'), /Ana María Pérez/);
-await ap.waitForSelector('#detailPane img[data-loaded="1"]');
-assert.equal(await ap.locator('#detailPane img[data-loaded="1"]').count(), 2, 'cédula y rostro visibles');
-await ap.screenshot({ path: SHOT + 'admin-expediente.png', fullPage: false });
-console.log('✓ login del administrador (y rechazo de credenciales malas y de cuentas de cliente)');
+await ap.waitForSelector('#appView:not(.hidden)');
+await ap.waitForSelector('h1.big');
+assert.match(await ap.textContent('#nav'), /Verificación1/);
+await ap.screenshot({ path: SHOT + 'panel-hoy.png' });
+console.log('✓ login del administrador; «Tu día» con contadores reales');
 
-// ---------- 3. aprueba la línea ----------
-await ap.fill('#creditLimit', '50');
-await ap.click('[data-act=approve-credit]');
-await ap.waitForFunction(() => /Línea de crédito aprobada/.test(document.querySelector('#toast').textContent));
-row = (await db.query('select * from public.clients')).rows[0];
-assert.equal(row.state.user.creditLineReview.status, 'approved'); assert.equal(row.state.user.creditLineReview.limit, 50);
-console.log('✓ línea de crédito aprobada desde el panel');
-
-// ---------- 4. el cliente recibe la aprobación y solicita un préstamo ----------
+// ---------- 3. verificación de identidad: pedir fotos nuevas, el cliente las reenvía y se aprueba ----------
+await ap.click('[data-go=verificacion]');
+await ap.waitForSelector('#main img[data-sb][src^="data:"]');
+assert.equal(await ap.locator('#main img[data-sb][src^="data:"]').count(), 2, 'cédula y rostro visibles');
+assert.equal(await ap.isDisabled('[data-act=vApprove]'), true, 'no se aprueba sin confirmar las casillas');
+globalThis.__answer = 'Foto borrosa';
+await ap.click('[data-act=vDocs]');
+await toastIs(ap, /fotos nuevas/);
 await cp.reload();
-await cp.waitForFunction(() => window.document.querySelector('[data-a=request]'), null, { timeout: 15000 });
+await cp.waitForSelector('[data-a=profileDocs]', { timeout: 15000 });
 if (await cp.locator('[data-a=tutorialNext]').count()) { for (let i = 0; i < 8 && await cp.locator('[data-a=tutorialNext]').count(); i++) await cp.click('[data-a=tutorialNext]'); }
+await cp.click('[data-a=profileDocs]');
+await cp.setInputFiles('#docFront', png); await cp.setInputFiles('#docSelfie', png);
+await cp.click('[data-a=identityDocsSave]');
+await toastIs(cp, /Documentos enviados/);
+await cp.waitForTimeout(1200);
+row = (await db.query('select * from public.clients')).rows[0];
+assert.equal(row.state.user.creditLineReview.status, 'pending', 'el cliente reenvió las fotos');
+console.log('✓ «Pedir fotos nuevas» llega al cliente, que las reenvía desde su app');
+await ap.click('[data-act=refresh]');
+await ap.click('[data-go=verificacion]');
+await ap.waitForSelector('[data-act=vCheck][data-k=name]');
+await ap.click('[data-act=vCheck][data-k=name]'); await ap.click('[data-act=vCheck][data-k=face]');
+await ap.selectOption('#vLevel', '1');
+await ap.screenshot({ path: SHOT + 'panel-verificacion.png' });
+await ap.click('[data-act=vApprove]');
+await toastIs(ap, /Línea de crédito aprobada/);
+row = (await db.query('select * from public.clients')).rows[0];
+assert.equal(row.state.user.creditLineReview.status, 'approved'); assert.equal(row.state.user.creditLineReview.limit, 70); assert.equal(row.state.user.levelOverride, 2);
+console.log('✓ línea aprobada con nivel inicial 2 ($70)');
+
+// ---------- 4. ajustes del negocio se aplican en la app del cliente ----------
+await ap.click('[data-go=ajustes]');
+await ap.fill('#rate2', '25'); await ap.fill('#setCap', '500'); await ap.fill('#setPay', 'Banco 0102 · 0414-0000000 · V-1');
+await ap.click('[data-act=saveSettings]');
+await toastIs(ap, /Ajustes guardados/);
+await cp.reload();
+await cp.waitForFunction(() => typeof GS !== 'undefined' && GS.rates && Number(GS.rates[2]) === 25, null, { timeout: 15000 });
+assert.equal(await cp.evaluate(() => level().limit), 70, 'el cliente ve su nivel 2');
+assert.match(await cp.evaluate(() => method('pm').detail), /0102/, 'el pago móvil de cobro viene de Ajustes');
+console.log('✓ Ajustes (comisión, capital, pago móvil) sincronizados con la app del cliente');
+
+// ---------- 5. solicitud con la comisión nueva y confirmación del préstamo ----------
+if (await cp.locator('[data-a=tutorialNext]').count()) { for (let i = 0; i < 8 && await cp.locator('[data-a=tutorialNext]').count(); i++) await cp.click('[data-a=tutorialNext]'); }
+await cp.evaluate(() => { A.tab('inicio'); });
+await cp.waitForSelector('[data-a=request]');
+await cp.evaluate(() => { const d = draft(); d.amount = 20; d.n = 2; });
 await cp.click('[data-a=request]');
 await cp.fill('#pmBank', 'Banesco'); await cp.fill('#pmPhone', '0414-1234567'); await cp.fill('#pmCI', 'V-12345678');
-await cp.click('[data-a=rnext]');
-await cp.click('[data-a=rsend]');
-await cp.waitForFunction(() => /Solicitud enviada/.test(document.querySelector('#toast').textContent));
+await cp.click('[data-a=rnext]'); await cp.click('[data-a=rsend]');
+await toastIs(cp, /Solicitud enviada/);
 await cp.waitForTimeout(1200);
 row = (await db.query('select * from public.clients')).rows[0];
 const req = row.state.loans.find((l) => l.status === 'solicitud');
-assert.ok(req, 'la solicitud quedó guardada en Supabase');
-console.log('✓ solicitud de préstamo guardada en Supabase: $' + req.amount + ' en ' + req.n + ' cuota(s)');
-
-// ---------- 5. el administrador la ve y la confirma ----------
-await ap.click('#refreshBtn');
-await ap.waitForSelector('[data-act=approve-loan]');
-assert.match(await ap.textContent('#summary'), /Préstamos por aprobar\s*1/);
-await ap.fill('[data-ref-loan]', '00123456');
-await ap.setInputFiles('[data-file-loan]', png);
-await ap.click('[data-act=approve-loan]');
-await ap.waitForFunction(() => /Préstamo confirmado/.test(document.querySelector('#toast').textContent), null, { timeout: 15000 });
+assert.ok(req, 'solicitud guardada'); assert.equal(req.rate, 25); assert.equal(req.total, 25);
+await ap.click('[data-act=refresh]');
+await ap.click('[data-go=solicitudes]');
+await ap.click('[data-act=approveOpen]');
+await ap.fill('#apRef', '00123456'); await ap.setInputFiles('#apFile', png);
+await ap.screenshot({ path: SHOT + 'panel-solicitudes.png' });
+await ap.click('[data-act=approveLoan]');
+await toastIs(ap, /Préstamo confirmado/);
 row = (await db.query('select * from public.clients')).rows[0];
-const loan = row.state.loans.find((l) => l.id === req.id);
-assert.equal(loan.status, 'activo'); assert.equal(loan.installments.length, req.n); assert.match(loan.desembolso.proofData, /^sb:/);
-console.log('✓ préstamo confirmado: cuotas generadas y comprobante de desembolso privado');
+let loan = row.state.loans.find((l) => l.id === req.id);
+assert.equal(loan.status, 'activo'); assert.equal(loan.installments.length, 2); assert.match(loan.desembolso.proofData, /^sb:/);
+assert.equal(Number((await db.query('select data from app_settings')).rows[0].data.capital), 480, 'el capital baja con el desembolso');
+await cp.waitForFunction(() => S.loans.some((l) => l.status === 'activo'), null, { timeout: 25000 });
+console.log('✓ solicitud con comisión de Ajustes (25 %) → confirmada → cuotas en la app del cliente; capital 500 → 480');
 
-// ---------- 6. el cliente ve el préstamo activo (sondeo cada 8 s) ----------
-await cp.waitForFunction(() => S.loans.some((l) => l.status === 'activo') && !/En revisión/.test(document.querySelector('#app').innerText), null, { timeout: 25000 });
-await cp.screenshot({ path: SHOT + 'cliente-prestamo.png' });
-console.log('✓ el cliente recibe el préstamo aprobado sin recargar');
-
-// ---------- 6b. el cliente paga la cuota 1 y el administrador la valida ----------
-await cp.click('[data-a=payOptions]');
-await cp.click('[data-a=payFull]');
-await cp.fill('#ref', '778899');
-await cp.setInputFiles('#proof', png);
+// ---------- 6. pago y validación en lote ----------
+await cp.evaluate(() => A.tab('prestamos'));
+await cp.click('[data-a=payOptions]'); await cp.click('[data-a=payFull]');
+await cp.fill('#ref', '778899'); await cp.setInputFiles('#proof', png);
 await cp.click('[data-a=psend]');
-await cp.waitForFunction(() => S.loans.some((l) => (l.installments || []).some((i) => i.status === 'validating')), null, { timeout: 10000 });
-await cp.waitForTimeout(1200);
+await cp.waitForTimeout(1500);
+await ap.click('[data-act=refresh]');
+await ap.click('[data-go=pagos]');
+await ap.waitForSelector('[data-act=paySel]:not([disabled])');
+assert.match(await ap.textContent('#main'), /Monto coincide/);
+await ap.click('[data-act=paySel]');
+await toastIs(ap, /Pagos validados/);
 row = (await db.query('select * from public.clients')).rows[0];
-assert.equal(row.state.loans.find((l) => l.id === req.id).installments[0].status, 'validating', 'pago enviado a Supabase');
-assert.match(row.state.loans.find((l) => l.id === req.id).installments[0].proofData, /^sb:/);
-await ap.click('#refreshBtn');
-await ap.waitForSelector('[data-act=approve-payment]');
-assert.match(await ap.textContent('#summary'), /Pagos por validar\s*1/);
-await ap.click('[data-act=approve-payment]');
-await ap.waitForFunction(() => /Pago validado/.test(document.querySelector('#toast').textContent));
-row = (await db.query('select * from public.clients')).rows[0];
-assert.equal(row.state.loans.find((l) => l.id === req.id).installments[0].status, 'paid');
-assert.equal(row.state.user.points, 10);
-await cp.waitForFunction(() => S.loans.some((l) => (l.installments || []).some((i) => i.status === 'paid')), null, { timeout: 25000 });
-console.log('✓ pago con captura privada → validado en el panel → el cliente lo ve pagado (+10 puntos)');
+loan = row.state.loans.find((l) => l.id === req.id);
+assert.equal(loan.installments[0].status, 'paid'); assert.equal(row.state.user.points, 10);
+assert.equal(Number((await db.query('select data from app_settings')).rows[0].data.capital), 492.5, 'el capital sube al cobrar');
+console.log('✓ pago validado en lote; +10 puntos; capital 480 → 492,5');
 
-// ---------- 7. cobrador ----------
-await ap.click('[data-tab=users]');
-await ap.waitForSelector('#userForm');
+// ---------- 7. ficha: nota interna, bloqueo, nivel y contraseña ----------
+await ap.fill('#topSearch', 'ana');
+await ap.waitForSelector('[data-act=pick]');
+await ap.click('[data-act=pick]');
+await ap.waitForSelector('#noteText');
+await ap.fill('#noteText', 'Cliente puntual'); await ap.click('[data-act=saveNote]');
+await toastIs(ap, /Nota guardada/);
+await ap.screenshot({ path: SHOT + 'panel-ficha.png', fullPage: true });
+await ap.click('[data-act=block]');
+await toastIs(ap, /Cuenta bloqueada/);
+await cp.waitForFunction(() => S.user.accountBlocked === true, null, { timeout: 25000 });
+assert.equal(await cp.evaluate(() => available()), 0, 'bloqueado: sin disponible');
+globalThis.__answer = 'clave-nueva-99';
+await ap.click('[data-act=resetPass]');
+await toastIs(ap, /Contraseña restablecida/);
+assert.equal((await db.query(`select note from client_notes`)).rows[0].note, 'Cliente puntual');
+assert.match((await db.query(`select encrypted_password from auth.users where email like 'v12345678%'`)).rows[0].encrypted_password, /^\$2a\$/);
+console.log('✓ nota interna privada, bloqueo sincronizado con el cliente y contraseña restablecida');
+
+// ---------- 8. secciones restantes y cobrador ----------
+for (const sec of ['cobros', 'mensajes', 'reportes', 'hoy']) { await ap.click('[data-go=' + sec + ']'); await ap.waitForTimeout(200); }
+await ap.click('[data-go=reportes]');
+await ap.click('[data-act=closePeriod]');
+await toastIs(ap, /Quincena cerrada/);
+await ap.click('[data-act=theme]');
+await ap.click('[data-go=hoy]');
+await ap.waitForTimeout(700); await ap.screenshot({ path: SHOT + 'panel-claro.png' });
+await ap.click('[data-act=theme]');
+await ap.click('[data-go=equipo]');
+await ap.waitForSelector('#uName');
 await ap.fill('#uName', 'Pedro Cobrador'); await ap.fill('#uEmail', 'pedro@quincena.app'); await ap.fill('#uPass', 'cobrador-1');
 await ap.selectOption('#uRole', 'cobrador');
-await ap.click('#uClients input[type=checkbox]');
-await ap.click('#userForm button[type=submit]');
-await ap.waitForFunction(() => /Usuario creado/.test(document.querySelector('#toast').textContent), null, { timeout: 10000 });
-assert.match(await ap.textContent('#tabUsers'), /pedro@quincena.app/);
-await ap.click('[data-tab=audit]');
-await ap.waitForFunction(() => /staff\.auth\.ok/.test(document.querySelector('#tabAudit').textContent));
-const kctx = await newCtx({ width: 1300, height: 900 });
+await ap.click('input[name=uClient]');
+await ap.click('[data-act=staffSave]');
+await toastIs(ap, /Usuario creado/);
+await ap.click('[data-go=auditoria]');
+await ap.waitForFunction(() => /staff\.auth\.ok/.test(document.querySelector('#main').textContent));
+const kctx = await newCtx({ width: 390, height: 844 });
 const kp = await kctx.newPage(); watch(kp, 'cobrador');
 await kp.goto(BASE + '/admin.html');
 await kp.fill('#email', 'pedro@quincena.app'); await kp.fill('#password', 'cobrador-1');
 await kp.click('#loginForm button[type=submit]');
-await kp.waitForSelector('[data-client]');
-assert.equal(await kp.locator('#btnUsers').isHidden(), true, 'el cobrador no ve la gestión de usuarios');
-console.log('✓ alta de cobrador desde el panel; entra y solo ve su cliente; auditoría visible');
+await kp.waitForSelector('h1.big');
+assert.equal(await kp.locator('[data-go=ajustes]').count(), 0, 'el cobrador no ve Ajustes');
+await kp.screenshot({ path: SHOT + 'panel-movil.png' });
+console.log('✓ calendario, mensajes, reportes, cierre de quincena, modo claro, equipo, auditoría y cobrador (móvil)');
 
-// ---------- 8. sesión persistente del cliente y cierre de sesión ----------
+// ---------- 9. el cliente entra con la contraseña nueva ----------
 const cp2 = await cctx.newPage(); watch(cp2, 'cliente2');
 await cp2.goto(BASE + '/');
 await cp2.waitForSelector('[data-a=profile]');
-await cp2.waitForTimeout(800);
-assert.equal(await cp2.locator('[data-a=clientLogin]').count(), 0, 'con sesión guardada no se vuelve a pedir la contraseña');
 await cp2.evaluate(() => A.authLogout());
 await cp2.waitForSelector('[data-a=clientLogin]');
-await cp2.fill('#clCI', 'v12345678'); await cp2.fill('#clPass', 'clave-segura-1');
+await cp2.fill('#clCI', 'v12345678'); await cp2.fill('#clPass', 'clave-nueva-99');
 await cp2.click('[data-a=clientLogin]');
-await cp2.waitForFunction(() => /Sesión iniciada/.test(document.querySelector('#toast').textContent));
-console.log('✓ cierre de sesión e inicio con cédula + contraseña');
+await toastIs(cp2, /Sesión iniciada/);
+console.log('✓ el cliente entra con la contraseña restablecida');
 
 assert.deepEqual(pageErrors, [], 'sin errores de JavaScript en las páginas');
 console.log('\nE2E OK');

@@ -7,7 +7,7 @@
     "test": "node esquema.test.mjs && node e2e.test.mjs"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "0.2.12",
+    "@electric-sql/pglite": "0.3.7",
     "playwright": "1.47.2"
   }
 }
