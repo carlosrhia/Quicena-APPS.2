@@ -1,5 +1,5 @@
 -- =====================================================================
--- Quincena · esquema de base de datos para Supabase (plan gratuito) · v2
+-- Quincena · esquema de base de datos para Supabase (plan gratuito) · v3
 -- ---------------------------------------------------------------------
 -- Cómo usarlo: Supabase → SQL Editor → New query → pega TODO este
 -- archivo → Run. Se puede ejecutar varias veces sin romper nada.
@@ -67,15 +67,45 @@ create table if not exists public.audit (
   detail text
 );
 
+-- ---------- verificación en dos pasos del personal (v3): contraseña + código por correo ----------
+-- La sesión del panel solo cuenta como "personal" si superó los dos pasos en esta misma sesión.
+create table if not exists public.staff_2fa (
+  user_id           uuid primary key references public.staff (user_id) on delete cascade,
+  password_at       timestamptz,
+  verified_sessions text[] not null default '{}'
+);
+alter table public.staff_2fa enable row level security;
+
+create or replace function public.jwt_has_method(methods text[]) returns boolean
+language sql stable as $$
+  select exists (select 1 from jsonb_array_elements(coalesce(auth.jwt() -> 'amr', '[]'::jsonb)) x
+                 where x ->> 'method' = any (methods));
+$$;
+
+-- ¿Esta sesión cumple la verificación en dos pasos? (obligatoria para administradores;
+-- para cobradores solo si en Ajustes se activa "staff2faAll"; "staff2fa": false la desactiva para todos)
+create or replace function public.staff_2fa_ok(uid uuid, r text) returns boolean
+language plpgsql stable security definer set search_path = public as $$
+declare cfg jsonb;
+begin
+  select data into cfg from public.app_settings where id = 1;
+  cfg := coalesce(cfg, '{}'::jsonb);
+  if coalesce(cfg ->> 'staff2fa', 'true') = 'false' then return true; end if;
+  if r <> 'admin' and coalesce(cfg ->> 'staff2faAll', 'false') <> 'true' then return true; end if;
+  return exists (select 1 from public.staff_2fa f
+                 where f.user_id = uid and (auth.jwt() ->> 'session_id') = any (f.verified_sessions));
+end;
+$$;
+
 -- ---------- funciones de apoyo para los permisos ----------
 create or replace function public.is_staff() returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.staff where user_id = auth.uid() and active);
+  select exists (select 1 from public.staff where user_id = auth.uid() and active and public.staff_2fa_ok(user_id, role));
 $$;
 
 create or replace function public.is_admin() returns boolean
 language sql stable security definer set search_path = public as $$
-  select exists (select 1 from public.staff where user_id = auth.uid() and active and role = 'admin');
+  select exists (select 1 from public.staff where user_id = auth.uid() and active and role = 'admin' and public.staff_2fa_ok(user_id, role));
 $$;
 
 -- ¿El usuario actual (personal) puede ver este expediente?
@@ -83,7 +113,7 @@ create or replace function public.can_see_client(cid uuid) returns boolean
 language sql stable security definer set search_path = public as $$
   select exists (
     select 1 from public.staff s
-    where s.user_id = auth.uid() and s.active
+    where s.user_id = auth.uid() and s.active and public.staff_2fa_ok(s.user_id, s.role)
       and (s.role = 'admin'
            or exists (select 1 from public.assignments a where a.user_id = s.user_id and a.client_id = cid))
   );
@@ -212,6 +242,9 @@ begin
         return 'Un préstamo nuevo debe ser una solicitud.';
       end if;
       if q_txt(nu -> 'accountBlocked') = 'true' then return 'Tu cuenta está bloqueada. Contacta al prestamista.'; end if;
+      if (select count(*) from jsonb_array_elements(n -> 'loans') x where q_txt(x -> 'status') = 'solicitud') > 1 then
+        return 'Ya tienes una solicitud en revisión. Espera la respuesta del prestamista.';
+      end if;
       -- la comisión y el total deben coincidir con los ajustes del negocio
       if jsonb_typeof(cfg -> 'rates') = 'object' then
         maxn := coalesce((select max(q_num(x -> 'maxN'))::int from jsonb_array_elements(q_arr(cfg -> 'levels')) x), 3);
@@ -458,9 +491,12 @@ begin
   select * into s from public.staff where user_id = auth.uid();
   if found then
     if not s.active then return jsonb_build_object('role', 'disabled'); end if;
+    if not public.staff_2fa_ok(s.user_id, s.role) then
+      return jsonb_build_object('role', s.role, 'id', s.user_id, 'email', s.email, 'name', s.name, 'twofa', 'required');
+    end if;
     update public.staff set last_login = now() where user_id = s.user_id;
     insert into public.audit (actor, action) values (s.role || ':' || s.email, 'staff.auth.ok');
-    return jsonb_build_object('role', s.role, 'id', s.user_id, 'email', s.email, 'name', s.name);
+    return jsonb_build_object('role', s.role, 'id', s.user_id, 'email', s.email, 'name', s.name, 'twofa', 'ok');
   end if;
   select * into c from public.clients where id = auth.uid();
   if found then return jsonb_build_object('role', 'cliente', 'id', c.id, 'name', c.name); end if;
@@ -560,7 +596,9 @@ create or replace function public.admin_set_client_password(p_client uuid, p_pas
 language plpgsql security definer set search_path = public, extensions, auth as $$
 begin
   if not public.is_admin() then raise exception 'Solo el administrador puede restablecer contraseñas.'; end if;
-  if length(coalesce(p_password, '')) < 8 then raise exception 'La contraseña debe tener al menos 8 caracteres.'; end if;
+  if length(coalesce(p_password, '')) < 8 or p_password !~ '[A-Za-zÁÉÍÓÚáéíóúÑñ]' or p_password !~ '[0-9]' then
+    raise exception 'La contraseña debe tener al menos 8 caracteres, con letras y números.';
+  end if;
   if not exists (select 1 from public.clients where id = p_client) then raise exception 'Cliente no encontrado.'; end if;
   update auth.users set encrypted_password = extensions.crypt(p_password, extensions.gen_salt('bf')), updated_at = now() where id = p_client;
   insert into public.audit (actor, action, detail)
@@ -575,19 +613,80 @@ grant execute on function public.staff_adjust_capital(numeric, text) to authenti
 revoke all on function public.admin_set_client_password(uuid, text) from public, anon;
 grant execute on function public.admin_set_client_password(uuid, text) to authenticated;
 
+
+-- Paso 1 (tras entrar con contraseña): deja constancia y dice si hace falta el código por correo.
+create or replace function public.staff_2fa_begin() returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare s public.staff;
+begin
+  select * into s from public.staff where user_id = auth.uid();
+  if not found then
+    if exists (select 1 from public.clients where id = auth.uid()) then
+      raise exception 'Esta es una cuenta de cliente: entra desde la app, no desde el panel.';
+    end if;
+    raise exception 'Esta cuenta no tiene acceso al panel. El administrador debe darla de alta.';
+  end if;
+  if not s.active then raise exception 'Tu cuenta del panel está desactivada. Habla con el administrador.'; end if;
+  if public.staff_2fa_ok(s.user_id, s.role) then return jsonb_build_object('required', false); end if;
+  if not public.jwt_has_method(array['password']) then raise exception 'Primero entra con tu contraseña.'; end if;
+  insert into public.staff_2fa (user_id, password_at) values (s.user_id, now())
+  on conflict (user_id) do update set password_at = now();
+  return jsonb_build_object('required', true, 'email', s.email);
+end;
+$$;
+
+-- Paso 2 (tras validar el código del correo): marca esta sesión como verificada.
+create or replace function public.staff_2fa_complete() returns boolean
+language plpgsql security definer set search_path = public as $$
+declare s public.staff; f public.staff_2fa; sid text := auth.jwt() ->> 'session_id';
+begin
+  select * into s from public.staff where user_id = auth.uid() and active;
+  if not found then raise exception 'Esta cuenta no tiene acceso al panel.'; end if;
+  if not public.jwt_has_method(array['otp', 'magiclink', 'email']) then raise exception 'Falta validar el código enviado al correo.'; end if;
+  select * into f from public.staff_2fa where user_id = s.user_id;
+  if not found or f.password_at is null or f.password_at < now() - interval '15 minutes' then
+    raise exception 'El inicio de sesión caducó. Vuelve a escribir tu contraseña.';
+  end if;
+  if sid is null then raise exception 'Sesión inválida.'; end if;
+  update public.staff_2fa
+     set password_at = null,
+         verified_sessions = (array_append(array_remove(verified_sessions, sid), sid))[greatest(1, cardinality(verified_sessions) - 8):]
+   where user_id = s.user_id;
+  insert into public.audit (actor, action) values (s.role || ':' || s.email, 'staff.2fa.ok');
+  return true;
+end;
+$$;
+
+revoke all on function public.staff_2fa_begin() from public, anon;
+grant execute on function public.staff_2fa_begin() to authenticated;
+revoke all on function public.staff_2fa_complete() from public, anon;
+grant execute on function public.staff_2fa_complete() to authenticated;
+
 -- ---------- almacenamiento privado de imágenes ----------
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('documentos', 'documentos', false, 5242880, array['image/jpeg', 'image/png', 'image/webp'])
 on conflict (id) do update set public = false, file_size_limit = excluded.file_size_limit, allowed_mime_types = excluded.allowed_mime_types;
 
+-- Límite antiabuso: cada cliente puede subir como máximo 20 imágenes cada 24 horas (el personal no tiene límite).
+create or replace function public.uploads_today(folder text) returns integer
+language sql stable security definer set search_path = public, storage as $$
+  select count(*)::int from storage.objects o
+  where o.bucket_id = 'documentos' and (storage.foldername(o.name))[1] = folder and o.created_at > now() - interval '24 hours';
+$$;
+
 drop policy if exists quincena_docs_insert on storage.objects;
 create policy quincena_docs_insert on storage.objects for insert to authenticated
-  with check (bucket_id = 'documentos' and public.can_use_folder((storage.foldername(name))[1]));
+  with check (bucket_id = 'documentos' and public.can_use_folder((storage.foldername(name))[1])
+              and (public.is_staff() or public.uploads_today((storage.foldername(name))[1]) < 20));
 drop policy if exists quincena_docs_select on storage.objects;
 create policy quincena_docs_select on storage.objects for select to authenticated
   using (bucket_id = 'documentos' and public.can_use_folder((storage.foldername(name))[1]));
 
 -- =====================================================================
+-- SI TE QUEDAS SIN ACCESO AL PANEL porque no llega el código del correo, desactiva
+-- temporalmente la verificación en dos pasos (y vuelve a activarla con 'true'):
+--   update public.app_settings set data = jsonb_set(data, '{staff2fa}', 'false') where id = 1;
+-- ---------------------------------------------------------------------
 -- PRIMER ADMINISTRADOR (ejecútalo aparte, después de crear tu usuario en
 -- Authentication → Users → Add user, con "Auto Confirm User" marcado).
 -- Cambia el correo y el nombre y pulsa Run:

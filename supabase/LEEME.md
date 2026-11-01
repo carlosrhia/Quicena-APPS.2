@@ -104,6 +104,48 @@ Las variables de entorno solo se aplican en despliegues nuevos.
 ---
 
 
+
+## Actualizar a la versión 3 (seguridad: código por correo, contraseñas fuertes y límites)
+
+1. **Une el pull request** en GitHub. Vercel publica el panel nuevo.
+2. **Plantilla del correo con el código.** En Supabase ve a **Authentication → Emails → Templates → Magic Link**
+   (en algunas versiones: *Email Templates*). Cambia el asunto a `Tu código de Quincena` y el contenido por:
+
+   ```html
+   <h2>Tu código para entrar a Quincena</h2>
+   <p>Escribe este código en el panel:</p>
+   <p style="font-size:28px;font-weight:bold;letter-spacing:6px">{{ .Token }}</p>
+   <p>Si no fuiste tú, cambia tu contraseña de inmediato.</p>
+   ```
+
+   Pulsa **Save**.
+3. **Ejecuta otra vez `supabase/schema.sql`** completo en **SQL Editor → Run**. No borra datos.
+4. **Contraseñas** (recomendado): **Authentication → Sign In / Providers → Email**:
+   *Minimum password length* = **8** y *Password requirements* = **letras y números** (*Letters and digits*). **Save**.
+5. Entra al panel: tras la contraseña te pedirá el **código de 6 dígitos** que llega a tu correo.
+
+**Importante sobre el correo:** el servidor de correo que trae Supabase gratis envía **pocos correos por hora** y solo a
+direcciones que sean miembros del equipo del proyecto (la cuenta con la que creaste Supabase lo es). Si tu correo de
+administrador es otro, o quieres que los cobradores también reciban código, configura un servidor propio en
+**Project Settings → Authentication → SMTP Settings** (por ejemplo Gmail con «contraseña de aplicación»).
+
+**Si te quedas sin acceso** porque no llega el código, en **SQL Editor** ejecuta:
+
+```sql
+update public.app_settings set data = jsonb_set(data, '{staff2fa}', 'false') where id = 1;
+```
+
+Entra, revisa el correo/SMTP y vuelve a activarlo cambiando `'false'` por `'true'`.
+
+Lo que añade esta versión:
+
+| Protección | Dónde |
+|---|---|
+| Código por correo al entrar al panel (administrador; cobradores opcional en **Ajustes**) | Base de datos: solo la sesión que pasó contraseña **y** código ve expedientes |
+| Contraseñas de 8+ caracteres con letras y números, con indicador de seguridad | App del cliente, panel y base de datos |
+| Una sola solicitud de préstamo pendiente por cliente | Base de datos |
+| Máximo 20 fotos subidas por cliente cada 24 h | Almacenamiento |
+
 ## Actualizar a la versión 2 del panel (ajustes del negocio, bloqueo, notas…)
 
 Si ya tenías Quincena funcionando, solo hay que hacer **una cosa** en Supabase:

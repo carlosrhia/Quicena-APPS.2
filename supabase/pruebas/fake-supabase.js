@@ -14,7 +14,7 @@
     single() { this.mode = 'single'; return this; }
     maybeSingle() { this.mode = 'maybe'; return this; }
     then(res, rej) {
-      return call('query', { uid: this.c.uid(), t: this.t, op: this.op, cols: this.cols, ret: this.ret, f: this.f, ord: this.ord, lim: this.lim, mode: this.mode, payload: this.payload }).then(res, rej);
+      return call('query', { claims: this.c.claims(), uid: this.c.uid(), t: this.t, op: this.op, cols: this.cols, ret: this.ret, f: this.f, ord: this.ord, lim: this.lim, mode: this.mode, payload: this.payload }).then(res, rej);
     }
   }
   class Client {
@@ -29,17 +29,20 @@
         async getSession() { return { data: { session: self.session() }, error: null }; },
         async signOut() { self.setSession(null); return { error: null }; },
         async updateUser({ password }) { return call('updateUser', { uid: self.uid(), password }); },
+        async signInWithOtp({ email, options }) { return call('otpSend', { email, create: !(options && options.shouldCreateUser === false) }); },
+        async verifyOtp({ email, token }) { const r = await call('otpVerify', { email, token }); if (!r.error) self.setSession(r.data.session); return r; },
       };
       this.storage = { from: (bucket) => ({
-        upload: async (path, blob) => { const b64 = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(blob); }); return call('upload', { uid: self.uid(), bucket, path, data: b64 }); },
-        createSignedUrl: (path) => call('signed', { uid: self.uid(), bucket, path }),
+        upload: async (path, blob) => { const b64 = await new Promise((ok) => { const r = new FileReader(); r.onload = () => ok(r.result); r.readAsDataURL(blob); }); return call('upload', { claims: self.claims(), uid: self.uid(), bucket, path, data: b64 }); },
+        createSignedUrl: (path) => call('signed', { claims: self.claims(), uid: self.uid(), bucket, path }),
       }) };
     }
     session() { if (!this.persist) return this.mem; try { return JSON.parse(localStorage.getItem(this.key) || 'null'); } catch (e) { return null; } }
     setSession(s) { if (!this.persist) { this.mem = s; return; } if (s) localStorage.setItem(this.key, JSON.stringify(s)); else localStorage.removeItem(this.key); }
     uid() { const s = this.session(); return s && s.user ? s.user.id : null; }
+    claims() { const s = this.session(); return s && s.user ? { sub: s.user.id, session_id: s.session_id, amr: s.amr } : {}; }
     from(t) { return new Query(this, t); }
-    rpc(name, args) { return { then: (res, rej) => call('rpc', { uid: this.uid(), name, args: args || {} }).then(res, rej) }; }
+    rpc(name, args) { return { then: (res, rej) => call('rpc', { claims: this.claims(), uid: this.uid(), name, args: args || {} }).then(res, rej) }; }
   }
   window.supabase = { createClient: (url, key, opts) => new Client(opts) };
 })();
